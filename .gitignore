@@ -89,3 +89,6 @@ docker-compose.override.yml
 
 # Optional: if using golangci-lint cache
 .golangci.yml.cache
+
+# AI 
+AGENTS.md

@@ -1,0 +1,50 @@
+services:
+  # The Application
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: dotbrain-api
+    ports:
+      - "8080:8080"
+    environment:
+      - DATABASE_URL=postgres://dotbrain_user:dotbrain_pass@db:5432/dotbrain_db?sslmode=disable
+      - PORT=8080
+      - ENV=development
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - dotbrain-net
+    restart: unless-stopped
+
+  # The Database (PostgreSQL)
+  db:
+    image: postgres:17-alpine
+    container_name: dotbrain-db
+    environment:
+      POSTGRES_USER: dotbrain_user
+      POSTGRES_PASSWORD: dotbrain_pass
+      POSTGRES_DB: dotbrain_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      # Optionally, copy your schema.sql into a db-init directory
+      # to automatically apply it on fresh startup:
+      - ./schema.sql:/docker-entrypoint-initdb.d/1_schema.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dotbrain_user -d dotbrain_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - dotbrain-net
+    restart: unless-stopped
+
+networks:
+  dotbrain-net:
+    driver: bridge
+
+volumes:
+  pgdata:
