@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -74,5 +75,36 @@ func TestPingHandler(t *testing.T) {
 
 	if response["message"] != "pong" {
 		t.Errorf("expected message 'pong', got '%s'", response["message"])
+	}
+}
+
+func TestWorkflowTriggerHandler_UnknownID(t *testing.T) {
+	router := NewRouter()
+
+	w := httptest.NewRecorder()
+	reqBody, _ := json.Marshal(map[string]any{"data": "test"})
+	req, _ := http.NewRequest("POST", "/api/v1/workflows/unknown-id/trigger", bytes.NewBuffer(reqBody))
+	req.Header.Set("Content-Type", "application/json")
+
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("expected status %d, got %d", http.StatusNotFound, w.Code)
+	}
+}
+
+func TestWorkflowTriggerHandler_Success(t *testing.T) {
+	router := NewRouter()
+
+	w := httptest.NewRecorder()
+	reqBody, _ := json.Marshal(map[string]any{"data": "test"})
+	// Assume "valid-id" is a known ID for the mock
+	req, _ := http.NewRequest("POST", "/api/v1/workflows/valid-id/trigger", bytes.NewBuffer(reqBody))
+	req.Header.Set("Content-Type", "application/json")
+
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("expected status %d, got %d", http.StatusAccepted, w.Code)
 	}
 }

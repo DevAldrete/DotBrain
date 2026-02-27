@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/devaldrete/dotbrain/internal/api"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func main() {
@@ -30,6 +31,12 @@ func main() {
 	}
 
 	// 3. Initialize API Router
+	dbURL := os.Getenv("DATABASE_URL")
+	pool, err := pgxpool.New(context.Background(), dbURL)
+	if err != nil {
+		logger.Error(fmt.Sprintf("Unable to connect to database: %v", err))
+	}
+	api := api.NewAPI(pool)
 	router := api.NewRouter()
 
 	// 4. Configure HTTP Server
