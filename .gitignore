@@ -92,3 +92,5 @@ docker-compose.override.yml
 
 # AI 
 AGENTS.md
+.agents/
+skills-lock.json
