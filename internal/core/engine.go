@@ -5,11 +5,37 @@ import (
 	"fmt"
 )
 
-var nodeRegistry = map[string]func() NodeExecutor{
-	"echo": func() NodeExecutor { return EchoNode{} },
-	"fail": func() NodeExecutor { return FailNode{} },
-	"math": func() NodeExecutor { return MathNode{} },
-	// Other nodes can be registered here or via a registration function
+var nodeRegistry = map[string]func(map[string]any) NodeExecutor{
+	"echo": func(p map[string]any) NodeExecutor { return EchoNode{} },
+	"fail": func(p map[string]any) NodeExecutor { return FailNode{} },
+	"math": func(p map[string]any) NodeExecutor {
+		node := MathNode{}
+		if val, ok := p["a"].(float64); ok {
+			node.A = &val
+		}
+		if val, ok := p["b"].(float64); ok {
+			node.B = &val
+		}
+		return node
+	},
+	"llm": func(p map[string]any) NodeExecutor {
+		node := LLMNode{}
+		if val, ok := p["prompt"].(string); ok {
+			node.Prompt = &val
+		}
+		return node
+	},
+	"safe_object": func(p map[string]any) NodeExecutor {
+		node := SafeObjectNode{Schema: make(map[string]string)}
+		if schema, ok := p["schema"].(map[string]any); ok {
+			for k, v := range schema {
+				if vStr, ok := v.(string); ok {
+					node.Schema[k] = vStr
+				}
+			}
+		}
+		return node
+	},
 }
 
 // Engine is a simple orchestrator that executes a slice of NodeExecutors sequentially.
@@ -31,8 +57,12 @@ func (e *Engine) LoadFromDefinition(def *WorkflowDefinition) error {
 		if !exists {
 			return fmt.Errorf("unknown node type: %s", config.Type)
 		}
-		// For a more advanced setup, we would initialize the node with config.Params here
-		e.Register(factory())
+
+		params := config.Params
+		if params == nil {
+			params = map[string]any{}
+		}
+		e.Register(factory(params))
 	}
 	return nil
 }

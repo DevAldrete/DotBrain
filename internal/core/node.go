@@ -21,22 +21,31 @@ func (f FailNode) Execute(ctx context.Context, input map[string]any) (map[string
 	return nil, fmt.Errorf("this node always fails")
 }
 
-type MathNode struct{}
+type MathNode struct {
+	A *float64
+	B *float64
+}
 
 func (m MathNode) Execute(ctx context.Context, input map[string]any) (map[string]any, error) {
-	v1, ok := input["a"].(float64)
-
-	if !ok {
+	var a float64
+	if val, ok := input["a"].(float64); ok {
+		a = val
+	} else if m.A != nil {
+		a = *m.A
+	} else {
 		return nil, fmt.Errorf("missing or invalid 'a' parameter")
 	}
 
-	v2, ok := input["b"].(float64)
-
-	if !ok {
+	var b float64
+	if val, ok := input["b"].(float64); ok {
+		b = val
+	} else if m.B != nil {
+		b = *m.B
+	} else {
 		return nil, fmt.Errorf("missing or invalid 'b' parameter")
 	}
 
-	result := v1 + v2
+	result := a + b
 
 	return map[string]any{
 		"result": result,

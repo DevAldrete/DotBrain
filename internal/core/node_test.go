@@ -97,3 +97,61 @@ func TestMathNode_Execute(t *testing.T) {
 		})
 	}
 }
+
+func floatPtr(v float64) *float64 { return &v }
+
+func TestMathNode_WithParams(t *testing.T) {
+	node := MathNode{
+		A: floatPtr(10.0), // Should be used if input 'a' is missing
+		B: floatPtr(5.5),  // Should be used if input 'b' is missing
+	}
+
+	tests := []struct {
+		name       string
+		input      map[string]any
+		wantResult map[string]any
+		wantErr    bool
+		errMsg     string
+	}{
+		{
+			name:       "uses params when input is empty",
+			input:      map[string]any{},
+			wantResult: map[string]any{"result": 15.5},
+			wantErr:    false,
+		},
+		{
+			name:       "input overrides params for 'a'",
+			input:      map[string]any{"a": 20.0},
+			wantResult: map[string]any{"result": 25.5},
+			wantErr:    false,
+		},
+		{
+			name:       "input overrides params for both",
+			input:      map[string]any{"a": 1.0, "b": 2.0},
+			wantResult: map[string]any{"result": 3.0},
+			wantErr:    false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := node.Execute(context.Background(), tt.input)
+
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("expected error, got nil")
+				}
+				if err.Error() != tt.errMsg {
+					t.Errorf("expected error message '%s', got '%v'", tt.errMsg, err.Error())
+				}
+			} else {
+				if err != nil {
+					t.Fatalf("expected no error, got %v", err)
+				}
+				if !reflect.DeepEqual(result, tt.wantResult) {
+					t.Errorf("expected result %v, got %v", tt.wantResult, result)
+				}
+			}
+		})
+	}
+}
