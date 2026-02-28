@@ -1,19 +1,33 @@
 package api
 
 import (
+	"context"
+	"encoding/json"
 	"net/http"
 	"time"
 
+	"github.com/devaldrete/dotbrain/internal/core"
+	"github.com/devaldrete/dotbrain/internal/db/sqlc"
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type API struct {
-	db *pgxpool.Pool
+	pool    *pgxpool.Pool
+	queries *db.Queries
 }
 
-func NewAPI(db *pgxpool.Pool) *API {
-	return &API{db: db}
+func NewAPI(pool *pgxpool.Pool) *API {
+	var queries *db.Queries
+	if pool != nil {
+		queries = db.New(pool)
+	}
+	return &API{
+		pool:    pool,
+		queries: queries,
+	}
 }
 
 // NewRouter initializes and returns a configured *gin.Engine router.
@@ -39,7 +53,10 @@ func (a *API) NewRouter() *gin.Engine {
 			c.JSON(http.StatusOK, gin.H{"message": "pong"})
 		})
 
-		// Workflow Trigger Endpoint
+		// Workflow Endpoints
+		v1.POST("/workflows", a.createWorkflowHandler)
+		v1.GET("/workflows", a.listWorkflowsHandler)
+		v1.GET("/workflows/:id", a.getWorkflowHandler)
 		v1.POST("/workflows/:id/trigger", a.workflowTriggerHandler)
 	}
 
@@ -58,7 +75,7 @@ func (a *API) healthCheckHandler(c *gin.Context) {
 // readinessHandler responds indicating if the app is ready to take traffic.
 // E.g., This might fail if the database connection drops.
 func (a *API) readinessHandler(c *gin.Context) {
-	if err := a.db.Ping(c); err != nil {
+	if err := a.pool.Ping(c); err != nil {
 		c.JSON(http.StatusServiceUnavailable, gin.H{
 			"status":  "NOT_READY",
 			"message": "Database connection failed",
@@ -75,27 +92,188 @@ func (a *API) readinessHandler(c *gin.Context) {
 
 // workflowTriggerHandler initiates the execution of a workflow by ID.
 func (a *API) workflowTriggerHandler(c *gin.Context) {
-	id := c.Param("id")
+	idStr := c.Param("id")
+	parsedID, err := uuid.Parse(idStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid workflow ID"})
+		return
+	}
 
-	// Temporary stub logic: only "valid-id" is found, others 404
-	if id != "valid-id" {
-		c.JSON(http.StatusNotFound, gin.H{
-			"error": "workflow not found",
-		})
+	var pgID pgtype.UUID
+	pgID.Bytes = parsedID
+	pgID.Valid = true
+
+	workflow, err := a.queries.GetWorkflow(c, pgID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "workflow not found"})
 		return
 	}
 
 	var payload map[string]any
 	if err := c.ShouldBindJSON(&payload); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"error": "invalid json body",
-		})
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid json body"})
 		return
 	}
 
-	// TODO: Dispatch workflow execution to engine asynchronously.
+	// Create a workflow run
+	runID, _ := uuid.NewV7()
+	var pgRunID pgtype.UUID
+	pgRunID.Bytes = runID
+	pgRunID.Valid = true
+
+	inputBytes, _ := json.Marshal(payload)
+
+	_, err = a.queries.CreateWorkflowRun(c, db.CreateWorkflowRunParams{
+		ID:         pgRunID,
+		WorkflowID: pgID,
+		Status:     "running",
+		InputData:  inputBytes,
+	})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create workflow run"})
+		return
+	}
+
+	// Run workflow asynchronously
+	go func(runID pgtype.UUID, w db.Workflow, initialData map[string]any) {
+		ctx := context.Background()
+
+		// Setup Engine
+		engine := core.NewEngine()
+		def, err := core.ParseDefinition(w.Definition)
+		if err != nil {
+			a.updateRunStatus(ctx, runID, "failed", nil, err.Error())
+			return
+		}
+
+		if err := engine.LoadFromDefinition(def); err != nil {
+			a.updateRunStatus(ctx, runID, "failed", nil, err.Error())
+			return
+		}
+
+		output, err := engine.Execute(ctx, initialData)
+		if err != nil {
+			a.updateRunStatus(ctx, runID, "failed", nil, err.Error())
+			return
+		}
+
+		a.updateRunStatus(ctx, runID, "completed", output, "")
+	}(pgRunID, workflow, payload)
+
 	c.JSON(http.StatusAccepted, gin.H{
 		"message": "workflow queued for execution",
-		"id":      id,
+		"run_id":  runID.String(),
 	})
+}
+
+// helper to update run status
+func (a *API) updateRunStatus(ctx context.Context, id pgtype.UUID, status string, output map[string]any, errMsg string) {
+	var outputBytes []byte
+	if output != nil {
+		outputBytes, _ = json.Marshal(output)
+	}
+
+	var pgErr pgtype.Text
+	if errMsg != "" {
+		pgErr.String = errMsg
+		pgErr.Valid = true
+	}
+
+	now := time.Now()
+	var pgNow pgtype.Timestamptz
+	pgNow.Time = now
+	pgNow.Valid = true
+
+	a.queries.UpdateWorkflowRunStatus(ctx, db.UpdateWorkflowRunStatusParams{
+		ID:          id,
+		Status:      status,
+		OutputData:  outputBytes,
+		Error:       pgErr,
+		CompletedAt: pgNow,
+	})
+}
+
+type CreateWorkflowRequest struct {
+	Name        string `json:"name" binding:"required"`
+	Description string `json:"description"`
+	Definition  any    `json:"definition" binding:"required"`
+}
+
+func (a *API) createWorkflowHandler(c *gin.Context) {
+	var req CreateWorkflowRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	defBytes, err := json.Marshal(req.Definition)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid definition format"})
+		return
+	}
+
+	// UUID v7 for newer better DB locality
+	id, err := uuid.NewV7()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to generate id"})
+		return
+	}
+
+	var pgID pgtype.UUID
+	pgID.Bytes = id
+	pgID.Valid = true
+
+	workflow, err := a.queries.CreateWorkflow(c, db.CreateWorkflowParams{
+		ID:          pgID,
+		Name:        req.Name,
+		Description: req.Description,
+		Definition:  defBytes,
+	})
+
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to create workflow: " + err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusCreated, workflow)
+}
+
+func (a *API) listWorkflowsHandler(c *gin.Context) {
+	workflows, err := a.queries.ListWorkflows(c, db.ListWorkflowsParams{
+		Limit:  100,
+		Offset: 0,
+	})
+
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list workflows: " + err.Error()})
+		return
+	}
+
+	// If no workflows, return empty array instead of null
+	if workflows == nil {
+		workflows = []db.Workflow{}
+	}
+
+	c.JSON(http.StatusOK, workflows)
+}
+
+func (a *API) getWorkflowHandler(c *gin.Context) {
+	idStr := c.Param("id")
+	parsedID, err := uuid.Parse(idStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid workflow ID"})
+		return
+	}
+
+	var pgID pgtype.UUID
+	pgID.Bytes = parsedID
+	pgID.Valid = true
+
+	workflow, err := a.queries.GetWorkflow(c, pgID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "workflow not found"})
+		return
+	}
+
+	c.JSON(http.StatusOK, workflow)
 }

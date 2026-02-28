@@ -5,6 +5,13 @@ import (
 	"fmt"
 )
 
+var nodeRegistry = map[string]func() NodeExecutor{
+	"echo": func() NodeExecutor { return EchoNode{} },
+	"fail": func() NodeExecutor { return FailNode{} },
+	"math": func() NodeExecutor { return MathNode{} },
+	// Other nodes can be registered here or via a registration function
+}
+
 // Engine is a simple orchestrator that executes a slice of NodeExecutors sequentially.
 type Engine struct {
 	nodes []NodeExecutor
@@ -15,6 +22,19 @@ func NewEngine() *Engine {
 	return &Engine{
 		nodes: make([]NodeExecutor, 0),
 	}
+}
+
+// LoadFromDefinition instantiates nodes from a workflow definition and registers them.
+func (e *Engine) LoadFromDefinition(def *WorkflowDefinition) error {
+	for _, config := range def.Nodes {
+		factory, exists := nodeRegistry[config.Type]
+		if !exists {
+			return fmt.Errorf("unknown node type: %s", config.Type)
+		}
+		// For a more advanced setup, we would initialize the node with config.Params here
+		e.Register(factory())
+	}
+	return nil
 }
 
 // Register adds a NodeExecutor to the engine's execution sequence.
