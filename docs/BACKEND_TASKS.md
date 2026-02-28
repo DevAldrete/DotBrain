@@ -19,38 +19,42 @@ For our Go backend, use standard library `testing` with table-driven tests when 
 
 ---
 
-## 🎯 Micro-Goals & Current Tasks
+## Current Tasks
 
-Based on the core features outlined in the project README, here are structured goals. **Every goal here must start with a test.**
+The original micro-goals below have been completed. Active development is now tracked in the task files under `docs/tasks/`. See `docs/ROADMAP.md` for the full plan and execution order.
 
-### 1. The "Safe Object" Validator Node (Pending)
-*README Reference*: "Type-Safe Validation: Integrated 'Safe Object' nodes for schema validation and data sanitization."
-- **Task**: Implement a new `SafeObjectNode` that implements `core.NodeExecutor`.
-- **Requirements**:
-  - Takes an `input` map and a `schema` definition (e.g., required keys, specific types).
-  - Returns validated data if it matches.
-  - Returns an error if validation fails.
-- **TDD Start**: Write `TestSafeObjectNode_Execute_MissingField` first.
+| Task | File | Description |
+|------|------|-------------|
+| TASK-01 | [docs/tasks/TASK-01-param-injection.md](tasks/TASK-01-param-injection.md) | Fix param injection into node factories |
+| TASK-02 | [docs/tasks/TASK-02-node-executions-audit-trail.md](tasks/TASK-02-node-executions-audit-trail.md) | Write `node_executions` rows during execution |
+| TASK-03 | [docs/tasks/TASK-03-run-queries-and-api.md](tasks/TASK-03-run-queries-and-api.md) | Add missing SQL queries and run API endpoints |
+| TASK-04 | [docs/tasks/TASK-04-fix-run-lifecycle.md](tasks/TASK-04-fix-run-lifecycle.md) | Fix workflow run status lifecycle |
+| TASK-05 | [docs/tasks/TASK-05-http-node.md](tasks/TASK-05-http-node.md) | Implement `HttpNode` |
+| TASK-06 | [docs/tasks/TASK-06-llm-node-openai.md](tasks/TASK-06-llm-node-openai.md) | Implement `LLMNode` with real OpenAI API |
+| TASK-07 | [docs/tasks/TASK-07-frontend-api-client.md](tasks/TASK-07-frontend-api-client.md) | Add typed frontend API client |
+| TASK-08 | [docs/tasks/TASK-08-frontend-dashboard.md](tasks/TASK-08-frontend-dashboard.md) | Build workflow dashboard in SvelteKit |
 
-### 2. HTTP Workflow Trigger Endpoint (Pending)
-- **Task**: Add a generic webhook trigger endpoint (`POST /api/v1/workflows/:id/trigger`) to `internal/api/router.go`.
-- **TDD Start**: Write a test in `internal/api/router_test.go` asserting a 404 for an unknown workflow ID, and 200/202 for a successfully queued workflow execution.
+---
 
-### 3. Agentic AI Node (OpenAI Integration Stub)
-*README Reference*: "Current: Unified interface for external LLM APIs (OpenAI, Anthropic, etc.)."
-- **Task**: Create an `LLMNode` stub in `internal/core/llm_node.go`.
-- **Requirements**:
-  - Accepts a `prompt` string in the input map.
-  - Returns a mock/stub response until the real API is integrated.
-- **TDD Start**: Write `TestLLMNode_Execute_MissingPrompt` to verify validation logic.
+## Completed Micro-Goals (Original)
+
+The tasks below are done and represent the baseline state of the project.
+
+### 1. The "Safe Object" Validator Node
+- `SafeObjectNode` is implemented in `internal/core/safe_object_node.go`
+- Not yet registered in the engine registry (see TASK-01 for the registration pattern)
+
+### 2. HTTP Workflow Trigger Endpoint
+- `POST /api/v1/workflows/:id/trigger` is implemented in `internal/api/router.go`
+- Returns 202 Accepted with a `run_id`
+
+### 3. Agentic AI Node (Stub)
+- `LLMNode` stub is implemented in `internal/core/llm_node.go`
+- Not yet wired to OpenAI (see TASK-06)
 
 ### 4. Basic DAG / Workflow Orchestrator
-*README Reference*: "Distributed workflow engine built in Go"
-- **Task**: Create an `Engine` struct that strings multiple `NodeExecutor` instances together.
-- **Requirements**:
-  - Can register a slice of Nodes.
-  - Executes them in sequence, passing output of Node A as input to Node B.
-- **TDD Start**: Write `TestEngine_SequentialExecution` that passes output from an `EchoNode` to a `MathNode`.
+- `Engine` is implemented in `internal/core/engine.go`
+- Sequential execution with `EchoNode`, `FailNode`, `MathNode`
 
 ---
 
