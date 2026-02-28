@@ -114,3 +114,78 @@ func TestEngine_LoadFromDefinition_NilParamsSafe(t *testing.T) {
 		t.Errorf("expected world, got %v", result["hello"])
 	}
 }
+
+type recordingHook struct {
+	starts    []string
+	completes []string
+	failures  []string
+}
+
+func (h *recordingHook) OnNodeStart(ctx context.Context, nodeID string, input map[string]any) {
+	h.starts = append(h.starts, nodeID)
+}
+
+func (h *recordingHook) OnNodeComplete(ctx context.Context, nodeID string, output map[string]any) {
+	h.completes = append(h.completes, nodeID)
+}
+
+func (h *recordingHook) OnNodeFail(ctx context.Context, nodeID string, err error) {
+	h.failures = append(h.failures, nodeID)
+}
+
+// TestEngine_Execute_CallsHookForEachNode verifies that the lifecycle hook
+// is called once per node in the correct order.
+func TestEngine_Execute_CallsHookForEachNode(t *testing.T) {
+	hook := &recordingHook{}
+	engine := core.NewEngine()
+	engine.Hook = hook
+	engine.RegisterWithID("node1", core.EchoNode{})
+	engine.RegisterWithID("node2", core.EchoNode{})
+
+	input := map[string]any{"key": "value"}
+	_, err := engine.Execute(context.Background(), input)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(hook.starts) != 2 {
+		t.Errorf("expected 2 OnNodeStart calls, got %d", len(hook.starts))
+	}
+	if len(hook.completes) != 2 {
+		t.Errorf("expected 2 OnNodeComplete calls, got %d", len(hook.completes))
+	}
+	if hook.starts[0] != "node1" || hook.starts[1] != "node2" {
+		t.Errorf("unexpected node start order: %v", hook.starts)
+	}
+}
+
+// TestEngine_Execute_CallsOnNodeFail verifies that OnNodeFail is called
+// when a node returns an error.
+func TestEngine_Execute_CallsOnNodeFail(t *testing.T) {
+	hook := &recordingHook{}
+	engine := core.NewEngine()
+	engine.Hook = hook
+	engine.RegisterWithID("failNode", core.FailNode{})
+
+	_, err := engine.Execute(context.Background(), map[string]any{})
+	if err == nil {
+		t.Fatal("expected error from FailNode")
+	}
+	if len(hook.failures) != 1 {
+		t.Errorf("expected 1 OnNodeFail call, got %d", len(hook.failures))
+	}
+	if hook.failures[0] != "failNode" {
+		t.Errorf("expected failure from failNode, got %v", hook.failures[0])
+	}
+}
+
+// TestEngine_Execute_NilHookDoesNotPanic verifies that an engine with
+// no hook set runs normally.
+func TestEngine_Execute_NilHookDoesNotPanic(t *testing.T) {
+	engine := core.NewEngine()
+	engine.RegisterWithID("node1", core.EchoNode{})
+	_, err := engine.Execute(context.Background(), map[string]any{"x": 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+}

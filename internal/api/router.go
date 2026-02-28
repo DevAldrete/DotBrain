@@ -140,6 +140,8 @@ func (a *API) workflowTriggerHandler(c *gin.Context) {
 
 		// Setup Engine
 		engine := core.NewEngine()
+		engine.Hook = NewDBNodeHook(a.queries, runID)
+
 		def, err := core.ParseDefinition(w.Definition)
 		if err != nil {
 			a.updateRunStatus(ctx, runID, "failed", nil, err.Error())

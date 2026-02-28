@@ -38,15 +38,28 @@ var nodeRegistry = map[string]func(map[string]any) NodeExecutor{
 	},
 }
 
+// NodeLifecycleHook provides callbacks during node execution.
+type NodeLifecycleHook interface {
+	OnNodeStart(ctx context.Context, nodeID string, input map[string]any)
+	OnNodeComplete(ctx context.Context, nodeID string, output map[string]any)
+	OnNodeFail(ctx context.Context, nodeID string, err error)
+}
+
+type registeredNode struct {
+	id       string
+	executor NodeExecutor
+}
+
 // Engine is a simple orchestrator that executes a slice of NodeExecutors sequentially.
 type Engine struct {
-	nodes []NodeExecutor
+	nodes []registeredNode
+	Hook  NodeLifecycleHook
 }
 
 // NewEngine creates a new Engine instance.
 func NewEngine() *Engine {
 	return &Engine{
-		nodes: make([]NodeExecutor, 0),
+		nodes: make([]registeredNode, 0),
 	}
 }
 
@@ -62,14 +75,22 @@ func (e *Engine) LoadFromDefinition(def *WorkflowDefinition) error {
 		if params == nil {
 			params = map[string]any{}
 		}
-		e.Register(factory(params))
+		e.RegisterWithID(config.ID, factory(params))
 	}
 	return nil
 }
 
 // Register adds a NodeExecutor to the engine's execution sequence.
 func (e *Engine) Register(node NodeExecutor) {
-	e.nodes = append(e.nodes, node)
+	e.RegisterWithID("", node)
+}
+
+// RegisterWithID adds a NodeExecutor to the engine's execution sequence with a specific ID.
+func (e *Engine) RegisterWithID(id string, node NodeExecutor) {
+	e.nodes = append(e.nodes, registeredNode{
+		id:       id,
+		executor: node,
+	})
 }
 
 // Execute runs the registered nodes sequentially, passing the output of one
@@ -77,10 +98,21 @@ func (e *Engine) Register(node NodeExecutor) {
 func (e *Engine) Execute(ctx context.Context, input map[string]any) (map[string]any, error) {
 	currentData := input
 
-	for _, node := range e.nodes {
-		output, err := node.Execute(ctx, currentData)
+	for _, nodeInfo := range e.nodes {
+		if e.Hook != nil {
+			e.Hook.OnNodeStart(ctx, nodeInfo.id, currentData)
+		}
+
+		output, err := nodeInfo.executor.Execute(ctx, currentData)
 		if err != nil {
+			if e.Hook != nil {
+				e.Hook.OnNodeFail(ctx, nodeInfo.id, err)
+			}
 			return nil, fmt.Errorf("node execution failed: %w", err)
+		}
+
+		if e.Hook != nil {
+			e.Hook.OnNodeComplete(ctx, nodeInfo.id, output)
 		}
 
 		// Optional: We can merge outputs or replace them. The simple requirement
