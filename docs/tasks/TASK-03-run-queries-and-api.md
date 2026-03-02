@@ -36,13 +36,15 @@ Add the missing SQL queries, regenerate the sqlc code, and wire up the three new
 
 ## Acceptance Criteria
 
-- [ ] `query.sql` contains `ListWorkflowRuns`, `ListNodeExecutionsForRun`
-- [ ] `sqlc generate` runs without errors and produces updated `query.sql.go`
-- [ ] `GET /api/v1/workflows/:id/runs` returns a JSON array of `WorkflowRun` objects, ordered by `created_at DESC`; supports optional `?limit=` and `?offset=` query params
-- [ ] `GET /api/v1/runs/:id` returns a single `WorkflowRun` or 404
-- [ ] `GET /api/v1/runs/:id/nodes` returns a JSON array of `NodeExecution` objects for the run, ordered by `created_at ASC`
-- [ ] All three endpoints return `[]` (not `null`) when no results are found
-- [ ] All three endpoints are covered by handler tests in `router_test.go`
+- [x] `query.sql` contains `ListWorkflowRuns`, `ListNodeExecutionsForRun`
+- [x] `sqlc generate` runs without errors and produces updated `query.sql.go`
+- [x] `GET /api/v1/workflows/:id/runs` returns a JSON array of `WorkflowRun` objects, ordered by `created_at DESC`; supports optional `?limit=` and `?offset=` query params
+- [x] `GET /api/v1/runs/:id` returns a single `WorkflowRun` or 404
+- [x] `GET /api/v1/runs/:id/nodes` returns a JSON array of `NodeExecution` objects for the run, ordered by `created_at ASC`
+- [x] All three endpoints return `[]` (not `null`) when no results are found
+- [x] All three endpoints are covered by handler tests in `router_test.go`
+
+> **Status: COMPLETE** — SQL queries added, sqlc regenerated, and all 3 endpoints implemented with handler tests. Tests use `queryRecorder`, `emptyRows`, and `mockRow` test infrastructure for DB interaction mocking. Invalid UUID params return 400.
 
 ---
 

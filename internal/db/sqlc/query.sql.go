@@ -189,6 +189,43 @@ func (q *Queries) GetWorkflowRun(ctx context.Context, id pgtype.UUID) (WorkflowR
 	return i, err
 }
 
+const listNodeExecutionsForRun = `-- name: ListNodeExecutionsForRun :many
+SELECT id, workflow_run_id, node_id, status, input_data, output_data, error, started_at, completed_at, created_at FROM node_executions
+WHERE workflow_run_id = $1
+ORDER BY created_at ASC
+`
+
+func (q *Queries) ListNodeExecutionsForRun(ctx context.Context, workflowRunID pgtype.UUID) ([]NodeExecution, error) {
+	rows, err := q.db.Query(ctx, listNodeExecutionsForRun, workflowRunID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []NodeExecution
+	for rows.Next() {
+		var i NodeExecution
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkflowRunID,
+			&i.NodeID,
+			&i.Status,
+			&i.InputData,
+			&i.OutputData,
+			&i.Error,
+			&i.StartedAt,
+			&i.CompletedAt,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listPendingNodeExecutions = `-- name: ListPendingNodeExecutions :many
 SELECT id, workflow_run_id, node_id, status, input_data, output_data, error, started_at, completed_at, created_at FROM node_executions
 WHERE status = 'pending'
@@ -209,6 +246,49 @@ func (q *Queries) ListPendingNodeExecutions(ctx context.Context, limit int32) ([
 			&i.ID,
 			&i.WorkflowRunID,
 			&i.NodeID,
+			&i.Status,
+			&i.InputData,
+			&i.OutputData,
+			&i.Error,
+			&i.StartedAt,
+			&i.CompletedAt,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listWorkflowRuns = `-- name: ListWorkflowRuns :many
+SELECT id, workflow_id, status, input_data, output_data, error, started_at, completed_at, created_at FROM workflow_runs
+WHERE workflow_id = $1
+ORDER BY created_at DESC
+LIMIT $2 OFFSET $3
+`
+
+type ListWorkflowRunsParams struct {
+	WorkflowID pgtype.UUID
+	Limit      int32
+	Offset     int32
+}
+
+func (q *Queries) ListWorkflowRuns(ctx context.Context, arg ListWorkflowRunsParams) ([]WorkflowRun, error) {
+	rows, err := q.db.Query(ctx, listWorkflowRuns, arg.WorkflowID, arg.Limit, arg.Offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []WorkflowRun
+	for rows.Next() {
+		var i WorkflowRun
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkflowID,
 			&i.Status,
 			&i.InputData,
 			&i.OutputData,

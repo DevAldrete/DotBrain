@@ -1,22 +1,24 @@
 # DotBrain — Development Roadmap
 
-## Current State (Baseline)
+## Current State
 
-The project can:
+The backend MVP is complete. The project can:
 
 - Create and store workflow definitions (POST /api/v1/workflows)
 - List and retrieve workflow definitions (GET)
 - Trigger a workflow run, which executes nodes in-process via a goroutine (POST /api/v1/workflows/:id/trigger)
 - Return a `run_id` to the caller (HTTP 202 Accepted)
-- Mark runs as `completed` or `failed` in the database
+- Pass `NodeConfig.Params` to node instances at runtime (param injection)
+- Record per-node execution detail (`node_executions` rows written via `DBNodeHook`)
+- Correctly model run lifecycle: `pending → running → completed/failed`
+- Expose run status and node details via 3 API endpoints
+- Execute real outbound HTTP requests via `HttpNode`
+- Execute real OpenAI Chat Completions API calls via `LLMNode`
+- Mark runs as `completed` or `failed` in the database with accurate `started_at` and `completed_at` timestamps
 
 The project **cannot** yet:
 
-- Pass `NodeConfig.Params` to node instances at runtime
-- Record per-node execution detail (`node_executions` rows are never written)
-- Expose run status or node details via the API
-- Execute real HTTP requests or real LLM calls
-- Show any of this in a UI
+- Show any of this in a UI (frontend tasks TASK-07, TASK-08 are pending)
 
 ---
 
@@ -26,9 +28,9 @@ These tasks focus on the execution engine and the data it produces. They must be
 
 | Task | File | Status |
 |------|------|--------|
-| [TASK-01](tasks/TASK-01-param-injection.md) | Fix param injection into node factories | Pending |
-| [TASK-02](tasks/TASK-02-node-executions-audit-trail.md) | Write `node_executions` rows during execution | Pending |
-| [TASK-04](tasks/TASK-04-fix-run-lifecycle.md) | Fix `workflow_run` status lifecycle (`pending → running`) | Pending |
+| [TASK-01](tasks/TASK-01-param-injection.md) | Fix param injection into node factories | **Done** |
+| [TASK-02](tasks/TASK-02-node-executions-audit-trail.md) | Write `node_executions` rows during execution | **Done** |
+| [TASK-04](tasks/TASK-04-fix-run-lifecycle.md) | Fix `workflow_run` status lifecycle (`pending → running`) | **Done** |
 
 **Order dependency:** TASK-01 must be completed before TASK-05 and TASK-06, since parameterized nodes (HTTP, LLM) require param injection to work. TASK-02 requires TASK-04 to be done first so the `run_id` and `started_at` are set correctly.
 
@@ -40,7 +42,7 @@ These tasks expose run data through HTTP endpoints. They depend on Phase 1 becau
 
 | Task | Description | Status |
 |------|-------------|--------|
-| [TASK-03](tasks/TASK-03-run-queries-and-api.md) | Add missing SQL queries + new run/node API endpoints | Pending |
+| [TASK-03](tasks/TASK-03-run-queries-and-api.md) | Add missing SQL queries + new run/node API endpoints | **Done** |
 
 ---
 
@@ -50,8 +52,8 @@ With params working (TASK-01) and the API surface expanded (TASK-03), new node t
 
 | Task | Description | Status |
 |------|-------------|--------|
-| [TASK-05](tasks/TASK-05-http-node.md) | Implement `HttpNode` — outbound HTTP requests | Pending |
-| [TASK-06](tasks/TASK-06-llm-node-openai.md) | Implement `LLMNode` with real OpenAI API | Pending |
+| [TASK-05](tasks/TASK-05-http-node.md) | Implement `HttpNode` — outbound HTTP requests | **Done** |
+| [TASK-06](tasks/TASK-06-llm-node-openai.md) | Implement `LLMNode` with real OpenAI API | **Done** |
 
 ---
 

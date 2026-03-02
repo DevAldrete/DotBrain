@@ -37,12 +37,14 @@ Every node factory receives `map[string]any` params so nodes can configure thems
 
 ## Acceptance Criteria
 
-- [ ] The node registry signature changes from `map[string]func() NodeExecutor` to `map[string]func(map[string]any) NodeExecutor`
-- [ ] `LoadFromDefinition` passes `config.Params` (or an empty map if nil) to each factory
-- [ ] `EchoNode` and `FailNode` compile and pass tests with the new signature (they ignore params)
-- [ ] `MathNode` optionally reads `a` and `b` from params as defaults, falling back to input values
-- [ ] All existing tests in `internal/core/` continue to pass without modification (backwards-compatible behavior)
-- [ ] No production code is written without a failing test first (TDD)
+- [x] The node registry signature changes from `map[string]func() NodeExecutor` to `map[string]func(map[string]any) NodeExecutor`
+- [x] `LoadFromDefinition` passes `config.Params` (or an empty map if nil) to each factory
+- [x] `EchoNode` and `FailNode` compile and pass tests with the new signature (they ignore params)
+- [x] `MathNode` optionally reads `a` and `b` from params as defaults, falling back to input values
+- [x] All existing tests in `internal/core/` continue to pass without modification (backwards-compatible behavior)
+- [x] No production code is written without a failing test first (TDD)
+
+> **Status: COMPLETE** — This task was already implemented before the current development session began. The registry already used `func(map[string]any) NodeExecutor` and `LoadFromDefinition` already passed `config.Params`.
 
 ---
 

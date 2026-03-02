@@ -58,6 +58,11 @@ func (a *API) NewRouter() *gin.Engine {
 		v1.GET("/workflows", a.listWorkflowsHandler)
 		v1.GET("/workflows/:id", a.getWorkflowHandler)
 		v1.POST("/workflows/:id/trigger", a.workflowTriggerHandler)
+		v1.GET("/workflows/:id/runs", a.listWorkflowRunsHandler)
+
+		// Run Endpoints
+		v1.GET("/runs/:id", a.getRunHandler)
+		v1.GET("/runs/:id/nodes", a.listNodeExecutionsHandler)
 	}
 
 	return r
@@ -126,7 +131,7 @@ func (a *API) workflowTriggerHandler(c *gin.Context) {
 	_, err = a.queries.CreateWorkflowRun(c, db.CreateWorkflowRunParams{
 		ID:         pgRunID,
 		WorkflowID: pgID,
-		Status:     "running",
+		Status:     "pending",
 		InputData:  inputBytes,
 	})
 	if err != nil {
@@ -137,6 +142,9 @@ func (a *API) workflowTriggerHandler(c *gin.Context) {
 	// Run workflow asynchronously
 	go func(runID pgtype.UUID, w db.Workflow, initialData map[string]any) {
 		ctx := context.Background()
+
+		// Transition to "running" with started_at
+		a.transitionToRunning(ctx, runID)
 
 		// Setup Engine
 		engine := core.NewEngine()
@@ -168,7 +176,22 @@ func (a *API) workflowTriggerHandler(c *gin.Context) {
 	})
 }
 
-// helper to update run status
+// transitionToRunning transitions a workflow run from "pending" to "running"
+// and sets started_at to the current time.
+func (a *API) transitionToRunning(ctx context.Context, id pgtype.UUID) {
+	now := time.Now()
+	var pgNow pgtype.Timestamptz
+	pgNow.Time = now
+	pgNow.Valid = true
+
+	a.queries.UpdateWorkflowRunStatus(ctx, db.UpdateWorkflowRunStatusParams{
+		ID:        id,
+		Status:    "running",
+		StartedAt: pgNow,
+	})
+}
+
+// updateRunStatus updates a workflow run to a terminal state.
 func (a *API) updateRunStatus(ctx context.Context, id pgtype.UUID, status string, output map[string]any, errMsg string) {
 	var outputBytes []byte
 	if output != nil {
@@ -278,4 +301,79 @@ func (a *API) getWorkflowHandler(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, workflow)
+}
+
+func (a *API) listWorkflowRunsHandler(c *gin.Context) {
+	idStr := c.Param("id")
+	parsedID, err := uuid.Parse(idStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid workflow ID"})
+		return
+	}
+
+	var pgID pgtype.UUID
+	pgID.Bytes = parsedID
+	pgID.Valid = true
+
+	runs, err := a.queries.ListWorkflowRuns(c, db.ListWorkflowRunsParams{
+		WorkflowID: pgID,
+		Limit:      100,
+		Offset:     0,
+	})
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list runs: " + err.Error()})
+		return
+	}
+
+	if runs == nil {
+		runs = []db.WorkflowRun{}
+	}
+
+	c.JSON(http.StatusOK, runs)
+}
+
+func (a *API) getRunHandler(c *gin.Context) {
+	idStr := c.Param("id")
+	parsedID, err := uuid.Parse(idStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid run ID"})
+		return
+	}
+
+	var pgID pgtype.UUID
+	pgID.Bytes = parsedID
+	pgID.Valid = true
+
+	run, err := a.queries.GetWorkflowRun(c, pgID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "run not found"})
+		return
+	}
+
+	c.JSON(http.StatusOK, run)
+}
+
+func (a *API) listNodeExecutionsHandler(c *gin.Context) {
+	idStr := c.Param("id")
+	parsedID, err := uuid.Parse(idStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid run ID"})
+		return
+	}
+
+	var pgID pgtype.UUID
+	pgID.Bytes = parsedID
+	pgID.Valid = true
+
+	executions, err := a.queries.ListNodeExecutionsForRun(c, pgID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to list node executions: " + err.Error()})
+		return
+	}
+
+	if executions == nil {
+		executions = []db.NodeExecution{}
+	}
+
+	c.JSON(http.StatusOK, executions)
 }

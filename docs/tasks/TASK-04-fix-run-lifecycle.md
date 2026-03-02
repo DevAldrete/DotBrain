@@ -46,12 +46,14 @@ Correctly model the two-phase transition: create the run as `pending` at request
 
 ## Acceptance Criteria
 
-- [ ] `CreateWorkflowRun` inserts the row with `status = "pending"`
-- [ ] The goroutine sets `status = "running"` and `started_at = NOW()` before calling `engine.Execute`
-- [ ] `completed_at` is set correctly when the run finishes (success or failure)
-- [ ] `started_at` is never NULL on a completed or failed run
-- [ ] All existing router tests pass
-- [ ] New tests cover the lifecycle transitions
+- [x] `CreateWorkflowRun` inserts the row with `status = "pending"`
+- [x] The goroutine sets `status = "running"` and `started_at = NOW()` before calling `engine.Execute`
+- [x] `completed_at` is set correctly when the run finishes (success or failure)
+- [x] `started_at` is never NULL on a completed or failed run
+- [x] All existing router tests pass
+- [x] New tests cover the lifecycle transitions
+
+> **Status: COMPLETE** — `CreateWorkflowRun` now uses `"pending"` status. Added `transitionToRunning()` method that updates status to `"running"` with `started_at` timestamp inside the goroutine before engine execution. Test: `TestTriggerHandler_CreatesRunAsPending`.
 
 ---
 

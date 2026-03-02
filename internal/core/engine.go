@@ -19,11 +19,7 @@ var nodeRegistry = map[string]func(map[string]any) NodeExecutor{
 		return node
 	},
 	"llm": func(p map[string]any) NodeExecutor {
-		node := LLMNode{}
-		if val, ok := p["prompt"].(string); ok {
-			node.Prompt = &val
-		}
-		return node
+		return NewLLMNode(p)
 	},
 	"safe_object": func(p map[string]any) NodeExecutor {
 		node := SafeObjectNode{Schema: make(map[string]string)}
@@ -35,6 +31,9 @@ var nodeRegistry = map[string]func(map[string]any) NodeExecutor{
 			}
 		}
 		return node
+	},
+	"http": func(p map[string]any) NodeExecutor {
+		return NewHttpNode(p)
 	},
 }
 

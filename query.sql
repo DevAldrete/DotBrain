@@ -64,3 +64,14 @@ SELECT * FROM node_executions
 WHERE status = 'pending'
 ORDER BY created_at ASC
 LIMIT $1;
+
+-- name: ListWorkflowRuns :many
+SELECT * FROM workflow_runs
+WHERE workflow_id = $1
+ORDER BY created_at DESC
+LIMIT $2 OFFSET $3;
+
+-- name: ListNodeExecutionsForRun :many
+SELECT * FROM node_executions
+WHERE workflow_run_id = $1
+ORDER BY created_at ASC;

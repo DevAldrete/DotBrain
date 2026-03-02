@@ -62,16 +62,18 @@ Example:
 
 ## Acceptance Criteria
 
-- [ ] `HttpNode` struct exists in `internal/core/http_node.go`
-- [ ] `HttpNode` implements `NodeExecutor`
-- [ ] `HttpNode` is initialized with `map[string]any` params (matching TASK-01 factory signature)
-- [ ] Missing `url` param returns an error from `Execute`
-- [ ] Successful HTTP request returns `status_code`, `body`, and `headers` in the output map
-- [ ] Non-2xx responses do NOT automatically return an error (the workflow decides what to do with the status code); the response is passed through regardless
-- [ ] `{{input.field}}` substitution works in `url` and `body`
-- [ ] A configurable timeout is respected; exceeding it returns an error
-- [ ] `HttpNode` is registered in `nodeRegistry` under the key `"http"`
-- [ ] `go test ./internal/core/...` passes with full test coverage for the node
+- [x] `HttpNode` struct exists in `internal/core/http_node.go`
+- [x] `HttpNode` implements `NodeExecutor`
+- [x] `HttpNode` is initialized with `map[string]any` params (matching TASK-01 factory signature)
+- [x] Missing `url` param returns an error from `Execute`
+- [x] Successful HTTP request returns `status_code`, `body`, and `headers` in the output map
+- [x] Non-2xx responses do NOT automatically return an error (the workflow decides what to do with the status code); the response is passed through regardless
+- [x] `{{input.field}}` substitution works in `url` and `body`
+- [x] A configurable timeout is respected; exceeding it returns an error
+- [x] `HttpNode` is registered in `nodeRegistry` under the key `"http"`
+- [x] `go test ./internal/core/...` passes with full test coverage for the node
+
+> **Status: COMPLETE** — `HttpNode` implemented in `internal/core/http_node.go` with `ApplyTemplate` function for `{{input.field}}` substitution (shared with `LLMNode`). 9 tests covering GET, POST with body, URL template substitution, non-2xx passthrough, missing URL error, default GET method, and more.
 
 ---
 

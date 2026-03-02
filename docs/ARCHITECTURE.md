@@ -18,14 +18,17 @@ DotBrain/
 ├── cmd/dotbrain/main.go          # Application entrypoint — reads config, starts HTTP server
 ├── internal/
 │   ├── api/
-│   │   ├── router.go             # Gin HTTP handlers and route registration
-│   │   └── router_test.go        # Integration-style tests using httptest
-│   └── core/
-│       ├── workflow.go           # WorkflowDefinition and NodeConfig data structures
-│       ├── engine.go             # Engine — sequential node orchestrator + node registry
-│       ├── node.go               # NodeExecutor interface; EchoNode, FailNode, MathNode
-│       ├── llm_node.go           # LLMNode (stub — not yet registered or wired to OpenAI)
-│       └── safe_object_node.go   # SafeObjectNode — schema-validating node (not yet registered)
+23: │   │   ├── router.go             # Gin HTTP handlers and route registration
+24: │   │   ├── router_test.go        # Integration-style tests using httptest
+25: │   │   ├── hook.go               # DBNodeHook — NodeLifecycleHook implementation that writes node_executions rows
+26: │   │   └── hook_test.go          # Tests for DBNodeHook
+27: │   └── core/
+28: │       ├── workflow.go           # WorkflowDefinition and NodeConfig data structures
+29: │       ├── engine.go             # Engine — sequential node orchestrator + node registry
+30: │       ├── node.go               # NodeExecutor interface; EchoNode, FailNode, MathNode
+31: │       ├── http_node.go          # HttpNode — outbound HTTP requests with template substitution; also exports ApplyTemplate
+32: │       ├── llm_node.go           # LLMNode — OpenAI Chat Completions API client (raw net/http)
+33: │       └── safe_object_node.go   # SafeObjectNode — schema-validating node (not yet registered)
 ├── internal/db/sqlc/
 │   ├── db.go                     # sqlc DBTX interface and Queries struct
 │   ├── models.go                 # Generated Go structs: Workflow, WorkflowRun, NodeExecution
@@ -151,11 +154,11 @@ var nodeRegistry = map[string]func(params map[string]any) NodeExecutor{
     "echo": func(p map[string]any) NodeExecutor { return EchoNode{} },
     "math": func(p map[string]any) NodeExecutor { return MathNode{Params: p} },
     "http": func(p map[string]any) NodeExecutor { return HttpNode{Params: p} },
-    "llm":  func(p map[string]any) NodeExecutor { return LLMNode{Params: p} },
+    "llm":  func(p map[string]any) NodeExecutor { return NewLLMNode(p) },
 }
 ```
 
-> Note: The registry signature above reflects the target state after TASK-01.
+> Note: The registry uses `NewLLMNode(p)` for the `"llm"` entry, which reads `OPENAI_API_KEY` from the environment and sets the default base URL.
 
 ---
 
@@ -172,9 +175,9 @@ All routes are under `/api/v1`:
 | `GET` | `/api/v1/workflows` | List all workflows |
 | `GET` | `/api/v1/workflows/:id` | Get a single workflow |
 | `POST` | `/api/v1/workflows/:id/trigger` | Trigger a workflow run |
-| `GET` | `/api/v1/workflows/:id/runs` | List runs for a workflow _(planned — TASK-03)_ |
-| `GET` | `/api/v1/runs/:id` | Get a single run _(planned — TASK-03)_ |
-| `GET` | `/api/v1/runs/:id/nodes` | Get node executions for a run _(planned — TASK-03)_ |
+| `GET` | `/api/v1/workflows/:id/runs` | List runs for a workflow |
+| `GET` | `/api/v1/runs/:id` | Get a single run |
+| `GET` | `/api/v1/runs/:id/nodes` | Get node executions for a run |
 
 ---
 
@@ -205,7 +208,7 @@ CREATE workflow_run (status = "pending")
 UPDATE workflow_run (status = "completed", output_data = last output, completed_at = NOW())
 ```
 
-> Note: The node_execution records and the `pending → running` status transition are the target state after TASK-02 and TASK-04.
+> The node_execution records are written by `DBNodeHook` (in `internal/api/hook.go`), which implements the `NodeLifecycleHook` interface. The `pending → running` status transition is handled by `transitionToRunning()` in `router.go`.
 
 ---
 
@@ -251,5 +254,5 @@ cd web && npm install && npm run build
 | `fail` | Stable | Always fails. Used in tests. |
 | `math` | Stable | Adds `input["a"]` + `input["b"]`, returns `{"result": sum}`. |
 | `safe_object` | Implemented, not registered | Validates and filters input against a type schema. |
-| `http` | Planned (TASK-05) | Makes an outbound HTTP request using params. |
-| `llm` | Stub, not registered (TASK-06) | Calls OpenAI Chat Completions API with a prompt template. |
+| `http` | Stable | Makes an outbound HTTP request using params. Supports `{{input.field}}` template substitution in URL and body. Non-2xx responses pass through without error. |
+| `llm` | Stable | Calls OpenAI Chat Completions API with a prompt template. Uses raw `net/http` (no external library). Supports `{{input.field}}` substitution in prompt. Returns response text and token usage. |

@@ -52,15 +52,17 @@ Option A is preferred because it keeps the engine decoupled from the database an
 
 ## Acceptance Criteria
 
-- [ ] `Engine` has a `Hook NodeLifecycleHook` field (can be nil — no-op if not set)
-- [ ] Before each node's `Execute`, `Hook.OnNodeStart` is called with the node ID and input
-- [ ] After each node's `Execute` succeeds, `Hook.OnNodeComplete` is called with the output
-- [ ] After each node's `Execute` fails, `Hook.OnNodeFail` is called with the error
-- [ ] The API layer (`workflowTriggerHandler`) creates a `DBNodeHook` that implements `NodeLifecycleHook` using `*db.Queries` and the `runID`
-- [ ] Each hook call writes/updates a `node_executions` row correctly
-- [ ] When `Hook` is nil, the engine runs normally without panicking
-- [ ] All existing tests pass (they don't set a hook)
-- [ ] New tests cover hook invocation order and DB writes
+- [x] `Engine` has a `Hook NodeLifecycleHook` field (can be nil — no-op if not set)
+- [x] Before each node's `Execute`, `Hook.OnNodeStart` is called with the node ID and input
+- [x] After each node's `Execute` succeeds, `Hook.OnNodeComplete` is called with the output
+- [x] After each node's `Execute` fails, `Hook.OnNodeFail` is called with the error
+- [x] The API layer (`workflowTriggerHandler`) creates a `DBNodeHook` that implements `NodeLifecycleHook` using `*db.Queries` and the `runID`
+- [x] Each hook call writes/updates a `node_executions` row correctly
+- [x] When `Hook` is nil, the engine runs normally without panicking
+- [x] All existing tests pass (they don't set a hook)
+- [x] New tests cover hook invocation order and DB writes
+
+> **Status: COMPLETE** — This task was already implemented before the current development session began. `DBNodeHook` in `internal/api/hook.go` creates/updates `node_executions` rows with proper lifecycle callbacks (`OnNodeStart`, `OnNodeComplete`, `OnNodeFail`). Tests exist in `hook_test.go`.
 
 ---
 

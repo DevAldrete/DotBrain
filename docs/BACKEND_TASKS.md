@@ -21,18 +21,18 @@ For our Go backend, use standard library `testing` with table-driven tests when 
 
 ## Current Tasks
 
-The original micro-goals below have been completed. Active development is now tracked in the task files under `docs/tasks/`. See `docs/ROADMAP.md` for the full plan and execution order.
+All backend tasks (TASK-01 through TASK-06) are **complete**. Frontend tasks (TASK-07, TASK-08) are pending. See `docs/ROADMAP.md` for the full plan.
 
-| Task | File | Description |
-|------|------|-------------|
-| TASK-01 | [docs/tasks/TASK-01-param-injection.md](tasks/TASK-01-param-injection.md) | Fix param injection into node factories |
-| TASK-02 | [docs/tasks/TASK-02-node-executions-audit-trail.md](tasks/TASK-02-node-executions-audit-trail.md) | Write `node_executions` rows during execution |
-| TASK-03 | [docs/tasks/TASK-03-run-queries-and-api.md](tasks/TASK-03-run-queries-and-api.md) | Add missing SQL queries and run API endpoints |
-| TASK-04 | [docs/tasks/TASK-04-fix-run-lifecycle.md](tasks/TASK-04-fix-run-lifecycle.md) | Fix workflow run status lifecycle |
-| TASK-05 | [docs/tasks/TASK-05-http-node.md](tasks/TASK-05-http-node.md) | Implement `HttpNode` |
-| TASK-06 | [docs/tasks/TASK-06-llm-node-openai.md](tasks/TASK-06-llm-node-openai.md) | Implement `LLMNode` with real OpenAI API |
-| TASK-07 | [docs/tasks/TASK-07-frontend-api-client.md](tasks/TASK-07-frontend-api-client.md) | Add typed frontend API client |
-| TASK-08 | [docs/tasks/TASK-08-frontend-dashboard.md](tasks/TASK-08-frontend-dashboard.md) | Build workflow dashboard in SvelteKit |
+| Task | File | Status |
+|------|------|--------|
+| TASK-01 | [docs/tasks/TASK-01-param-injection.md](tasks/TASK-01-param-injection.md) | **Done** |
+| TASK-02 | [docs/tasks/TASK-02-node-executions-audit-trail.md](tasks/TASK-02-node-executions-audit-trail.md) | **Done** |
+| TASK-03 | [docs/tasks/TASK-03-run-queries-and-api.md](tasks/TASK-03-run-queries-and-api.md) | **Done** |
+| TASK-04 | [docs/tasks/TASK-04-fix-run-lifecycle.md](tasks/TASK-04-fix-run-lifecycle.md) | **Done** |
+| TASK-05 | [docs/tasks/TASK-05-http-node.md](tasks/TASK-05-http-node.md) | **Done** |
+| TASK-06 | [docs/tasks/TASK-06-llm-node-openai.md](tasks/TASK-06-llm-node-openai.md) | **Done** |
+| TASK-07 | [docs/tasks/TASK-07-frontend-api-client.md](tasks/TASK-07-frontend-api-client.md) | Pending |
+| TASK-08 | [docs/tasks/TASK-08-frontend-dashboard.md](tasks/TASK-08-frontend-dashboard.md) | Pending |
 
 ---
 
@@ -48,9 +48,10 @@ The tasks below are done and represent the baseline state of the project.
 - `POST /api/v1/workflows/:id/trigger` is implemented in `internal/api/router.go`
 - Returns 202 Accepted with a `run_id`
 
-### 3. Agentic AI Node (Stub)
-- `LLMNode` stub is implemented in `internal/core/llm_node.go`
-- Not yet wired to OpenAI (see TASK-06)
+### 3. Agentic AI Node
+- `LLMNode` is implemented in `internal/core/llm_node.go`
+- Calls the OpenAI Chat Completions API using raw `net/http` (no external library)
+- Registered as `"llm"` in the engine node registry
 
 ### 4. Basic DAG / Workflow Orchestrator
 - `Engine` is implemented in `internal/core/engine.go`
@@ -62,6 +63,11 @@ The tasks below are done and represent the baseline state of the project.
 
 We have established baseline tests for:
 - `internal/core/node.go` (Echo, Fail, Math nodes)
-- `internal/api/router.go` (Health, Readiness, Ping)
+- `internal/core/http_node.go` (HttpNode — 9 tests using httptest.NewServer)
+- `internal/core/llm_node.go` (LLMNode — 6 tests using mock OpenAI server)
+- `internal/api/router.go` (Health, Readiness, Ping, Trigger, run lifecycle, 3 run/node endpoints)
+- `internal/api/hook.go` (DBNodeHook lifecycle callbacks)
+
+**33 tests total, all passing.** 2 skipped (DB-dependent legacy tests).
 
 Always run `go test ./... -v` before committing any code to ensure pristine build states.
