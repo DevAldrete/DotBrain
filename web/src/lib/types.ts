@@ -36,8 +36,15 @@ export interface NodeExecution {
 }
 
 // Core workflow definition (matches core.WorkflowDefinition / core.NodeConfig)
+export interface EdgeConfig {
+	from: string;
+	to: string;
+	condition?: 'success' | 'failure' | '';
+}
+
 export interface WorkflowDefinition {
 	nodes: NodeConfig[];
+	edges?: EdgeConfig[];
 }
 
 export interface NodeConfig {

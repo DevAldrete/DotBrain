@@ -13,6 +13,13 @@ A workflow definition is the static description of what a workflow does. It is s
 
 type WorkflowDefinition struct {
     Nodes []NodeConfig `json:"nodes"`
+    Edges []EdgeConfig `json:"edges"`
+}
+
+type EdgeConfig struct {
+    From      string `json:"from"`                // source node ID
+    To        string `json:"to"`                  // target node ID
+    Condition string `json:"condition,omitempty"` // "success" | "failure" | "" (always)
 }
 
 type NodeConfig struct {
@@ -34,6 +41,13 @@ type NodeConfig struct {
       "type": "<node-type>",
       "params": { }
     }
+  ],
+  "edges": [
+    {
+      "from": "<source-node-id>",
+      "to": "<target-node-id>",
+      "condition": "success"
+    }
   ]
 }
 ```
@@ -42,10 +56,14 @@ type NodeConfig struct {
 
 | Field | Type | Required | Rules |
 |---|---|---|---|
-| `nodes` | array | yes | Ordered list of steps. Executed top-to-bottom. Must not be empty. |
+| `nodes` | array | yes | List of steps. Must not be empty. |
 | `nodes[].id` | string | yes | Must be unique within the workflow. Used as the `node_id` in `node_executions` rows. |
 | `nodes[].type` | string | yes | Must match a key in the engine's node registry: `echo`, `fail`, `math`, `http`, `llm`, `safe_object`. |
 | `nodes[].params` | object | no | Node-specific configuration. See [nodes.md](nodes.md) for each type's param schema. Omit or set to `{}` for nodes with no params. |
+| `edges` | array | no | Connections between nodes forming a DAG. If omitted, edges are inferred from node order (linear execution). |
+| `edges[].from` | string | yes | Source node ID. Must match a `nodes[].id`. |
+| `edges[].to` | string | yes | Target node ID. Must match a `nodes[].id`. |
+| `edges[].condition` | string | no | `"success"` (follow on success), `"failure"` (follow on error), or omit/`""` for unconditional. |
 
 ### Constraints
 
@@ -168,4 +186,72 @@ The raw `[]byte` comes from the `workflows.definition` JSONB column (retrieved v
 
 - **ID naming:** use descriptive kebab-case IDs (`fetch-user`, `summarize-content`) — they appear in the UI and in `node_executions` records, making run logs readable.
 - **Param vs. input:** params are static (set at definition time); use `{{input.field}}` substitution when a value should come from the runtime data stream.
-- **No edges yet:** the current engine only supports a linear `nodes` array. There is no `edges` field. Branching, fan-out, and conditional routing are not yet implemented.
+- **Edges:** use `edges` to define DAG structures. Omit `edges` for simple linear pipelines — the engine infers linear edges from node order.
+- **Conditions:** use `"condition": "success"` or `"condition": "failure"` on edges for conditional routing. Omit `condition` for unconditional edges.
+- **Cycles:** the engine rejects cyclic graphs at load time. All DAGs must be acyclic.
+
+---
+
+## DAG Examples
+
+### Conditional routing
+
+Route to different nodes based on success or failure of a predecessor:
+
+```json
+{
+  "nodes": [
+    { "id": "fetch", "type": "http", "params": { "url": "https://api.example.com/data" } },
+    { "id": "on-success", "type": "llm", "params": { "prompt": "Summarize: {{input.body}}" } },
+    { "id": "on-failure", "type": "http", "params": { "url": "https://alerts.example.com/notify", "method": "POST" } }
+  ],
+  "edges": [
+    { "from": "fetch", "to": "on-success", "condition": "success" },
+    { "from": "fetch", "to": "on-failure", "condition": "failure" }
+  ]
+}
+```
+
+**Data flow:**
+
+```
+trigger payload → fetch
+                     ├─ success → on-success (receives fetch output)
+                     └─ failure → on-failure (receives original input)
+```
+
+---
+
+### Parallel fan-out
+
+Run multiple nodes in parallel after a common predecessor:
+
+```json
+{
+  "nodes": [
+    { "id": "start", "type": "echo" },
+    { "id": "branch-a", "type": "http", "params": { "url": "https://api-a.example.com" } },
+    { "id": "branch-b", "type": "http", "params": { "url": "https://api-b.example.com" } },
+    { "id": "merge", "type": "echo" }
+  ],
+  "edges": [
+    { "from": "start", "to": "branch-a" },
+    { "from": "start", "to": "branch-b" },
+    { "from": "branch-a", "to": "merge" },
+    { "from": "branch-b", "to": "merge" }
+  ]
+}
+```
+
+**Data flow:**
+
+```
+trigger payload → start
+                    ├─ branch-a (parallel)
+                    └─ branch-b (parallel)
+                         │
+                         ▼
+                       merge (waits for both, receives merged outputs)
+```
+
+Nodes at the same depth with zero remaining in-degree execute concurrently.

@@ -3,6 +3,7 @@ package core
 import (
 	"context"
 	"fmt"
+	"sync"
 )
 
 var nodeRegistry = map[string]func(map[string]any) NodeExecutor{
@@ -49,10 +50,24 @@ type registeredNode struct {
 	executor NodeExecutor
 }
 
-// Engine is a simple orchestrator that executes a slice of NodeExecutors sequentially.
+// dagNode represents a node in the DAG with its executor, dependencies, and outgoing edges.
+type dagNode struct {
+	id       string
+	executor NodeExecutor
+	params   map[string]any
+}
+
+// Engine is an orchestrator that executes nodes either sequentially or as a DAG.
 type Engine struct {
+	// Legacy sequential mode
 	nodes []registeredNode
-	Hook  NodeLifecycleHook
+
+	// DAG mode
+	dagNodes map[string]*dagNode
+	edges    []EdgeConfig
+	dagMode  bool
+
+	Hook NodeLifecycleHook
 }
 
 // NewEngine creates a new Engine instance.
@@ -62,8 +77,85 @@ func NewEngine() *Engine {
 	}
 }
 
+// inferEdges generates linear edges from node order when no edges are defined.
+func inferEdges(nodes []NodeConfig) []EdgeConfig {
+	if len(nodes) <= 1 {
+		return nil
+	}
+	edges := make([]EdgeConfig, 0, len(nodes)-1)
+	for i := 1; i < len(nodes); i++ {
+		edges = append(edges, EdgeConfig{
+			From: nodes[i-1].ID,
+			To:   nodes[i].ID,
+		})
+	}
+	return edges
+}
+
+// detectCycle checks for cycles in the DAG using Kahn's algorithm.
+// Returns an error if a cycle is detected.
+func detectCycle(nodeIDs []string, edges []EdgeConfig) error {
+	inDegree := make(map[string]int)
+	for _, id := range nodeIDs {
+		inDegree[id] = 0
+	}
+
+	adjacency := make(map[string][]string)
+	for _, edge := range edges {
+		adjacency[edge.From] = append(adjacency[edge.From], edge.To)
+		inDegree[edge.To]++
+	}
+
+	queue := make([]string, 0)
+	for _, id := range nodeIDs {
+		if inDegree[id] == 0 {
+			queue = append(queue, id)
+		}
+	}
+
+	visited := 0
+	for len(queue) > 0 {
+		node := queue[0]
+		queue = queue[1:]
+		visited++
+
+		for _, neighbor := range adjacency[node] {
+			inDegree[neighbor]--
+			if inDegree[neighbor] == 0 {
+				queue = append(queue, neighbor)
+			}
+		}
+	}
+
+	if visited != len(nodeIDs) {
+		return fmt.Errorf("workflow definition contains a cycle")
+	}
+	return nil
+}
+
 // LoadFromDefinition instantiates nodes from a workflow definition and registers them.
+// When edges are present (or inferred), the engine switches to DAG mode.
 func (e *Engine) LoadFromDefinition(def *WorkflowDefinition) error {
+	edges := def.Edges
+	if len(edges) == 0 {
+		edges = inferEdges(def.Nodes)
+	}
+
+	// Collect node IDs for cycle detection
+	nodeIDs := make([]string, len(def.Nodes))
+	for i, config := range def.Nodes {
+		nodeIDs[i] = config.ID
+	}
+
+	// Detect cycles
+	if len(edges) > 0 {
+		if err := detectCycle(nodeIDs, edges); err != nil {
+			return err
+		}
+	}
+
+	// Build DAG nodes
+	dagNodes := make(map[string]*dagNode, len(def.Nodes))
 	for _, config := range def.Nodes {
 		factory, exists := nodeRegistry[config.Type]
 		if !exists {
@@ -74,17 +166,26 @@ func (e *Engine) LoadFromDefinition(def *WorkflowDefinition) error {
 		if params == nil {
 			params = map[string]any{}
 		}
-		e.RegisterWithID(config.ID, factory(params))
+		dagNodes[config.ID] = &dagNode{
+			id:       config.ID,
+			executor: factory(params),
+			params:   params,
+		}
 	}
+
+	e.dagNodes = dagNodes
+	e.edges = edges
+	e.dagMode = true
+
 	return nil
 }
 
-// Register adds a NodeExecutor to the engine's execution sequence.
+// Register adds a NodeExecutor to the engine's execution sequence (legacy mode).
 func (e *Engine) Register(node NodeExecutor) {
 	e.RegisterWithID("", node)
 }
 
-// RegisterWithID adds a NodeExecutor to the engine's execution sequence with a specific ID.
+// RegisterWithID adds a NodeExecutor to the engine's execution sequence with a specific ID (legacy mode).
 func (e *Engine) RegisterWithID(id string, node NodeExecutor) {
 	e.nodes = append(e.nodes, registeredNode{
 		id:       id,
@@ -92,9 +193,17 @@ func (e *Engine) RegisterWithID(id string, node NodeExecutor) {
 	})
 }
 
-// Execute runs the registered nodes sequentially, passing the output of one
-// as the input to the next.
+// Execute runs the engine. If LoadFromDefinition was called (DAG mode), it runs
+// the DAG executor. Otherwise, it falls back to sequential execution.
 func (e *Engine) Execute(ctx context.Context, input map[string]any) (map[string]any, error) {
+	if e.dagMode {
+		return e.executeDAG(ctx, input)
+	}
+	return e.executeSequential(ctx, input)
+}
+
+// executeSequential runs nodes in the legacy sequential order.
+func (e *Engine) executeSequential(ctx context.Context, input map[string]any) (map[string]any, error) {
 	currentData := input
 
 	for _, nodeInfo := range e.nodes {
@@ -114,12 +223,217 @@ func (e *Engine) Execute(ctx context.Context, input map[string]any) (map[string]
 			e.Hook.OnNodeComplete(ctx, nodeInfo.id, output)
 		}
 
-		// Optional: We can merge outputs or replace them. The simple requirement
-		// says "passing output of Node A as input to Node B". Let's replace for now,
-		// but typically we'd merge if the orchestrator is passing the accumulated state.
-		// For a simple sequence where node B only relies on node A's output, replacement works.
 		currentData = output
 	}
 
 	return currentData, nil
+}
+
+// nodeResult holds the result of executing a single DAG node.
+type nodeResult struct {
+	id     string
+	output map[string]any
+	err    error
+}
+
+// executeDAG runs nodes in topological order with support for fan-out,
+// fan-in, and conditional routing.
+func (e *Engine) executeDAG(ctx context.Context, input map[string]any) (map[string]any, error) {
+	// Build adjacency and in-degree maps
+	outEdges := make(map[string][]EdgeConfig)
+	inDegree := make(map[string]int)
+
+	for id := range e.dagNodes {
+		inDegree[id] = 0
+	}
+	for _, edge := range e.edges {
+		outEdges[edge.From] = append(outEdges[edge.From], edge)
+		inDegree[edge.To]++
+	}
+
+	// Track node outputs for data passing
+	nodeOutputs := make(map[string]map[string]any)
+
+	// Track remaining in-degrees (mutable during execution)
+	remaining := make(map[string]int)
+	for id, deg := range inDegree {
+		remaining[id] = deg
+	}
+
+	// Find initial ready nodes (zero in-degree)
+	var ready []string
+	for id, deg := range remaining {
+		if deg == 0 {
+			ready = append(ready, id)
+		}
+	}
+
+	// Track which nodes were deactivated (condition not met)
+	deactivated := make(map[string]bool)
+
+	var lastOutput map[string]any
+
+	// Process nodes in topological batches
+	for len(ready) > 0 {
+		batch := ready
+		ready = nil
+
+		resultsCh := make(chan nodeResult, len(batch))
+		var wg sync.WaitGroup
+
+		for _, nodeID := range batch {
+			if deactivated[nodeID] {
+				// This node was deactivated by a condition check. Still need to
+				// propagate deactivation to downstream nodes.
+				e.propagateDeactivation(nodeID, outEdges, remaining, deactivated, &ready)
+				continue
+			}
+
+			node := e.dagNodes[nodeID]
+
+			// Build merged input from all predecessors
+			mergedInput := e.buildMergedInput(nodeID, input, nodeOutputs)
+
+			// Resolve template parameters against merged input
+			resolvedInput := e.resolveTemplates(node.params, mergedInput)
+
+			wg.Add(1)
+			go func(n *dagNode, nodeInput map[string]any) {
+				defer wg.Done()
+
+				if e.Hook != nil {
+					e.Hook.OnNodeStart(ctx, n.id, nodeInput)
+				}
+
+				output, err := n.executor.Execute(ctx, nodeInput)
+				resultsCh <- nodeResult{id: n.id, output: output, err: err}
+			}(node, resolvedInput)
+		}
+
+		// Wait for all goroutines then close channel
+		go func() {
+			wg.Wait()
+			close(resultsCh)
+		}()
+
+		for result := range resultsCh {
+			nodeID := result.id
+			succeeded := result.err == nil
+
+			if succeeded {
+				nodeOutputs[nodeID] = result.output
+				lastOutput = result.output
+				if e.Hook != nil {
+					e.Hook.OnNodeComplete(ctx, nodeID, result.output)
+				}
+			} else {
+				if e.Hook != nil {
+					e.Hook.OnNodeFail(ctx, nodeID, result.err)
+				}
+			}
+
+			// Process outgoing edges based on conditions
+			for _, edge := range outEdges[nodeID] {
+				shouldFollow := false
+				switch edge.Condition {
+				case "":
+					// Unconditional: always follow
+					shouldFollow = succeeded
+				case "success":
+					shouldFollow = succeeded
+				case "failure":
+					shouldFollow = !succeeded
+				}
+
+				if !shouldFollow {
+					deactivated[edge.To] = true
+				}
+
+				remaining[edge.To]--
+				if remaining[edge.To] == 0 {
+					ready = append(ready, edge.To)
+				}
+			}
+		}
+	}
+
+	if lastOutput != nil {
+		return lastOutput, nil
+	}
+	return input, nil
+}
+
+// propagateDeactivation handles nodes that were deactivated by conditions,
+// decrementing in-degrees of their successors and potentially deactivating them too.
+func (e *Engine) propagateDeactivation(nodeID string, outEdges map[string][]EdgeConfig, remaining map[string]int, deactivated map[string]bool, ready *[]string) {
+	for _, edge := range outEdges[nodeID] {
+		deactivated[edge.To] = true
+		remaining[edge.To]--
+		if remaining[edge.To] == 0 {
+			*ready = append(*ready, edge.To)
+		}
+	}
+}
+
+// buildMergedInput creates the input map for a node by merging all predecessor outputs.
+// If the node has no predecessors, it receives the original workflow input.
+func (e *Engine) buildMergedInput(nodeID string, originalInput map[string]any, nodeOutputs map[string]map[string]any) map[string]any {
+	// Find all predecessors of this node
+	predecessors := make([]string, 0)
+	for _, edge := range e.edges {
+		if edge.To == nodeID {
+			predecessors = append(predecessors, edge.From)
+		}
+	}
+
+	if len(predecessors) == 0 {
+		return originalInput
+	}
+
+	// Merge all predecessor outputs
+	merged := make(map[string]any)
+	for _, predID := range predecessors {
+		if output, ok := nodeOutputs[predID]; ok {
+			for k, v := range output {
+				merged[k] = v
+			}
+		}
+	}
+
+	// If no predecessor produced output (e.g., all failed), use original input
+	if len(merged) == 0 {
+		return originalInput
+	}
+
+	return merged
+}
+
+// resolveTemplates resolves {{input.field}} templates in node params against the actual input.
+func (e *Engine) resolveTemplates(params map[string]any, input map[string]any) map[string]any {
+	resolved := make(map[string]any)
+	for k, v := range input {
+		resolved[k] = v
+	}
+
+	// Apply template resolution from params to the input
+	for k, v := range params {
+		if strVal, ok := v.(string); ok {
+			resolvedVal := ApplyTemplate(strVal, input)
+			// Try to parse as float64 if it looks like a number
+			if resolvedVal != strVal {
+				var f float64
+				if _, err := fmt.Sscanf(resolvedVal, "%f", &f); err == nil {
+					resolved[k] = f
+				} else {
+					resolved[k] = resolvedVal
+				}
+			} else {
+				resolved[k] = v
+			}
+		} else {
+			resolved[k] = v
+		}
+	}
+
+	return resolved
 }

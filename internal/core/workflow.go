@@ -5,6 +5,14 @@ import "encoding/json"
 // WorkflowDefinition represents a sequence of nodes to execute
 type WorkflowDefinition struct {
 	Nodes []NodeConfig `json:"nodes"`
+	Edges []EdgeConfig `json:"edges"`
+}
+
+// EdgeConfig represents a connection between two nodes
+type EdgeConfig struct {
+	From      string `json:"from"`
+	To        string `json:"to"`
+	Condition string `json:"condition,omitempty"`
 }
 
 // NodeConfig specifies a single execution step
