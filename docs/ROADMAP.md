@@ -1,8 +1,8 @@
 # DotBrain — Development Roadmap
 
-## Current State
+## Current State (as of Phase 4)
 
-The backend MVP is complete. The project can:
+The backend MVP is complete and the frontend dashboard exists. The project can:
 
 - Create and store workflow definitions (POST /api/v1/workflows)
 - List and retrieve workflow definitions (GET)
@@ -18,7 +18,14 @@ The backend MVP is complete. The project can:
 
 The project **cannot** yet:
 
-- Show any of this in a UI (frontend tasks TASK-07, TASK-08 are pending)
+- Execute workflows as a DAG (branching, parallel nodes, conditional edges)
+- Retry failed nodes automatically
+- Survive a server restart without leaving runs stuck as `running`
+- Cancel an in-progress run
+- Authenticate any API caller
+- Schedule workflows via cron
+- Stream run progress in real time (UI requires a manual refresh)
+- Use LLM providers other than OpenAI
 
 ---
 
@@ -63,8 +70,75 @@ The dashboard consumes the API surface from Phase 2. The new node types from Pha
 
 | Task | Description | Status |
 |------|-------------|--------|
-| [TASK-07](tasks/TASK-07-frontend-api-client.md) | Add typed API client (`web/src/lib/api.ts`) | Pending |
-| [TASK-08](tasks/TASK-08-frontend-dashboard.md) | Build workflow dashboard pages in SvelteKit | Pending |
+| [TASK-07](tasks/TASK-07-frontend-api-client.md) | Add typed API client (`web/src/lib/api.ts`) | **Done** |
+| [TASK-08](tasks/TASK-08-frontend-dashboard.md) | Build workflow dashboard pages in SvelteKit | **Done** |
+
+---
+
+## Phase 5 — Engine Evolution
+
+These tasks harden and extend the core execution engine. TASK-09 (DAG) and TASK-11 (crash recovery) are independent and can be done in parallel. TASK-10 depends on TASK-09 because the retry policy is added to `NodeConfig`, which is restructured in that task.
+
+| Task | Description | Priority | Status |
+|------|-------------|----------|--------|
+| [TASK-09](tasks/TASK-09-dag-edges.md) | DAG edges and branching engine | Critical | Pending |
+| [TASK-10](tasks/TASK-10-retry-backoff.md) | Retry policy with exponential backoff | Critical | Pending |
+| [TASK-11](tasks/TASK-11-crash-recovery.md) | Crash recovery for stale running runs | Critical | Pending |
+
+**Order dependency:** TASK-10 requires TASK-09. TASK-11 is independent.
+
+---
+
+## Phase 6 — API Completeness
+
+These tasks fill gaps in the HTTP API. Both are self-contained and can be done in any order.
+
+| Task | Description | Priority | Status |
+|------|-------------|----------|--------|
+| [TASK-12](tasks/TASK-12-workflow-crud.md) | Workflow update (`PUT`) and delete (`DELETE`) endpoints | High | Pending |
+| [TASK-13](tasks/TASK-13-run-cancellation.md) | Run cancellation (`POST /runs/:id/cancel`) | High | Pending |
+
+---
+
+## Phase 7 — Triggers
+
+Scheduled execution via cron expressions. Depends on crash recovery (TASK-11) because the same startup repair logic applies to scheduled runs that were interrupted.
+
+| Task | Description | Priority | Status |
+|------|-------------|----------|--------|
+| [TASK-14](tasks/TASK-14-cron-triggers.md) | Cron / scheduled triggers | High | Pending |
+
+**Order dependency:** TASK-11 should be completed first.
+
+---
+
+## Phase 8 — Security
+
+Authentication middleware. Self-contained and can be done at any point, but must be done before any network-accessible deployment.
+
+| Task | Description | Priority | Status |
+|------|-------------|----------|--------|
+| [TASK-15](tasks/TASK-15-auth.md) | API key authentication middleware | High | Pending |
+
+---
+
+## Phase 9 — Node Library
+
+Extends the LLM node to support multiple providers and removes the security problem of storing API keys in the workflow definition JSON.
+
+| Task | Description | Priority | Status |
+|------|-------------|----------|--------|
+| [TASK-16](tasks/TASK-16-multi-provider-llm.md) | Multi-provider LLM node (OpenAI, Anthropic, Ollama) | Medium | Pending |
+
+---
+
+## Phase 10 — UX
+
+Real-time run progress via Server-Sent Events. Additive — the polling UI continues to work while this is implemented.
+
+| Task | Description | Priority | Status |
+|------|-------------|----------|--------|
+| [TASK-17](tasks/TASK-17-sse-streaming.md) | Real-time run streaming via SSE | Medium | Pending |
 
 ---
 
@@ -74,11 +148,8 @@ These are valid future directions but are not part of the current plan:
 
 - **Redis / external queue**: The goroutine approach is sufficient while the system runs as a single process. Redis becomes relevant when horizontal scaling or cross-restart durability is needed.
 - **Visual drag-and-drop builder**: A proper node graph editor (e.g., using Svelte Flow) is a significant standalone effort. The JSON editor in the create workflow form is sufficient for now.
-- **Real-time run streaming (SSE/WebSocket)**: Polling the run status endpoint is acceptable for the MVP dashboard.
-- **Anthropic support**: The `LLMNode` architecture (once TASK-06 is done) will make adding Anthropic straightforward.
 - **Database migration framework**: The `schema.sql` approach is workable while the schema is still changing. Consider `goose` or `golang-migrate` once the schema stabilizes.
-- **Branching / DAG workflows**: The engine currently runs nodes in a linear sequence. Conditional branching and parallel execution are future engine improvements.
-- **Authentication / authorization**: No auth exists. Add JWT or session-based auth before any public deployment.
+- **JWT / session auth**: TASK-15 uses a simpler API-key approach. Full JWT auth is a larger effort and not required for the intended use case.
 
 ---
 
@@ -94,6 +165,17 @@ TASK-01  (param injection)
 TASK-03  (run API endpoints) — can start in parallel with TASK-01
    └──> TASK-07  (frontend API client)
            └──> TASK-08  (frontend dashboard)
+
+--- Phase 5+ ---
+
+TASK-09  (DAG edges)          TASK-11  (crash recovery)
+   └──> TASK-10  (retry)             └──> TASK-14  (cron triggers)
+
+TASK-12  (workflow CRUD)      — independent, any time
+TASK-13  (run cancellation)   — independent, any time
+TASK-15  (auth)               — independent, any time
+TASK-16  (multi-provider LLM) — independent, any time
+TASK-17  (SSE streaming)      — independent, any time
 ```
 
-The critical path is: **TASK-04 → TASK-01 → TASK-02 → TASK-03 → TASK-07 → TASK-08**, with TASK-05 and TASK-06 insertable after TASK-01.
+The critical path for Phase 5 is: **TASK-09 → TASK-10**, with **TASK-11 → TASK-14** as a parallel track.
