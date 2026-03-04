@@ -54,7 +54,7 @@ CREATE INDEX idx_workflow_runs_status ON workflow_runs(status);
 | `pending` | Run row created; goroutine not yet started |
 | `running` | Goroutine is active; nodes are executing |
 | `completed` | All nodes finished successfully |
-| `failed` | A node returned an error, or definition parsing failed |
+| `failed` | A node returned an error, definition parsing failed, or crash recovery marked the run as failed |
 | `cancelled` | Reserved; not yet implemented |
 
 ---
@@ -117,6 +117,12 @@ The `UNIQUE(workflow_run_id, node_id)` constraint enforces idempotency: each nod
     ┌─────────────────┐       ┌─────────────────┐
     │   completed     │       │     failed      │
     └─────────────────┘       └─────────────────┘
+                                       ▲
+                                       │
+                              crash recovery /
+                              watchdog timeout
+                              (from pending or
+                               running)
 ```
 
 `completed` and `failed` are terminal states. Once set, no further updates occur.
@@ -125,7 +131,21 @@ The `UNIQUE(workflow_run_id, node_id)` constraint enforces idempotency: each nod
 - `ParseDefinition` returns an error (malformed JSON)
 - `LoadFromDefinition` returns an error (unknown node type)
 - Any `NodeExecutor.Execute` returns an error
-- The goroutine is not itself error-recovered — a panic would leave the run in `running` indefinitely (no recovery mechanism exists yet)
+- **Crash recovery at startup:** `RecoverStaleRuns` marks any runs stuck in `running` or `pending` as `failed` with the error `"run aborted: server restarted while execution was in progress"`
+- **Watchdog timeout:** `FailTimedOutRuns` marks `running` runs whose `started_at` exceeds `RUN_MAX_DURATION` (default 1h) as `failed` with the error `"run timed out: exceeded maximum duration of <duration>"`
+
+### Crash Recovery
+
+On startup, `RecoverStaleRuns` is called immediately after `NewAPI` to fail any runs left in a non-terminal state from a previous crash. This prevents runs from being stuck in `running` or `pending` indefinitely.
+
+A background watchdog goroutine (`RunWatchdog`) runs on a configurable interval (`WATCHDOG_INTERVAL`, default 5m) and calls `FailTimedOutRuns` to mark runs that have exceeded `RUN_MAX_DURATION` (default 1h) as failed. The watchdog is cancelled during graceful shutdown.
+
+**Environment variables:**
+
+| Variable | Default | Description |
+|---|---|---|
+| `RUN_MAX_DURATION` | `1h` | Maximum allowed duration for a running workflow run |
+| `WATCHDOG_INTERVAL` | `5m` | How often the watchdog checks for timed-out runs |
 
 ---
 
@@ -191,6 +211,8 @@ type NodeExecution struct {
 | `UpdateNodeExecutionStatus` | UPDATE (partial, via COALESCE) | `DBNodeHook.OnNodeComplete`, `DBNodeHook.OnNodeFail` |
 | `ListNodeExecutionsForRun` | SELECT by run_id (ordered by created_at) | `listNodeExecutionsHandler` |
 | `ListPendingNodeExecutions` | SELECT where status='pending' | (defined but unused) |
+| `FailStaleRuns` | UPDATE running/pending → failed | `RecoverStaleRuns` (startup) |
+| `FailRunsExceedingDuration` | UPDATE running past threshold → failed | `FailTimedOutRuns` (watchdog) |
 
 `UpdateWorkflowRunStatus` and `UpdateNodeExecutionStatus` use `COALESCE(sqlc.narg(...), existing_value)` — this means passing a nil/zero value for an optional field leaves the existing column value unchanged, enabling partial updates without a full struct.
 

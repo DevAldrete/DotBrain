@@ -125,6 +125,44 @@ func (q *Queries) CreateWorkflowRun(ctx context.Context, arg CreateWorkflowRunPa
 	return i, err
 }
 
+const failRunsExceedingDuration = `-- name: FailRunsExceedingDuration :execrows
+UPDATE workflow_runs
+SET status = 'failed',
+    error = $1,
+    completed_at = NOW()
+WHERE status = 'running'
+  AND started_at < $2
+`
+
+type FailRunsExceedingDurationParams struct {
+	Error     pgtype.Text
+	StartedAt pgtype.Timestamptz
+}
+
+func (q *Queries) FailRunsExceedingDuration(ctx context.Context, arg FailRunsExceedingDurationParams) (int64, error) {
+	result, err := q.db.Exec(ctx, failRunsExceedingDuration, arg.Error, arg.StartedAt)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const failStaleRuns = `-- name: FailStaleRuns :execrows
+UPDATE workflow_runs
+SET status = 'failed',
+    error = $1,
+    completed_at = NOW()
+WHERE status IN ('running', 'pending')
+`
+
+func (q *Queries) FailStaleRuns(ctx context.Context, error pgtype.Text) (int64, error) {
+	result, err := q.db.Exec(ctx, failStaleRuns, error)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const getNodeExecution = `-- name: GetNodeExecution :one
 SELECT id, workflow_run_id, node_id, status, input_data, output_data, error, started_at, completed_at, created_at FROM node_executions
 WHERE id = $1 LIMIT 1

@@ -75,3 +75,18 @@ LIMIT $2 OFFSET $3;
 SELECT * FROM node_executions
 WHERE workflow_run_id = $1
 ORDER BY created_at ASC;
+
+-- name: FailStaleRuns :execrows
+UPDATE workflow_runs
+SET status = 'failed',
+    error = $1,
+    completed_at = NOW()
+WHERE status IN ('running', 'pending');
+
+-- name: FailRunsExceedingDuration :execrows
+UPDATE workflow_runs
+SET status = 'failed',
+    error = $1,
+    completed_at = NOW()
+WHERE status = 'running'
+  AND started_at < $2;

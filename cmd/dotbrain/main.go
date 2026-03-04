@@ -36,8 +36,35 @@ func main() {
 	if err != nil {
 		logger.Error(fmt.Sprintf("Unable to connect to database: %v", err))
 	}
-	api := api.NewAPI(pool)
-	router := api.NewRouter()
+	a := api.NewAPI(pool)
+
+	// 3a. Crash Recovery: fail any runs left in running/pending from a previous crash
+	if err := a.RecoverStaleRuns(context.Background()); err != nil {
+		logger.Error("crash recovery failed", "error", err)
+	}
+
+	// 3b. Watchdog: periodically fail runs that exceed max duration
+	maxDuration := 1 * time.Hour
+	if v := os.Getenv("RUN_MAX_DURATION"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			maxDuration = d
+		} else {
+			logger.Error("invalid RUN_MAX_DURATION, using default", "value", v, "error", err)
+		}
+	}
+	watchdogInterval := 5 * time.Minute
+	if v := os.Getenv("WATCHDOG_INTERVAL"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			watchdogInterval = d
+		} else {
+			logger.Error("invalid WATCHDOG_INTERVAL, using default", "value", v, "error", err)
+		}
+	}
+	watchdogCtx, watchdogCancel := context.WithCancel(context.Background())
+	go a.RunWatchdog(watchdogCtx, maxDuration, watchdogInterval)
+	logger.Info("watchdog started", "maxDuration", maxDuration, "interval", watchdogInterval)
+
+	router := a.NewRouter()
 
 	// 4. Configure HTTP Server
 	srv := &http.Server{
@@ -69,6 +96,9 @@ func main() {
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 	logger.Info("Shutdown Server ...")
+
+	// Stop the watchdog before shutting down the server
+	watchdogCancel()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
