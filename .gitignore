@@ -1,0 +1,97 @@
+# Go build & dependency related
+/bin/
+/pkg/
+/vendor/
+
+# Common Go generated/test files
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+*.prof
+
+# Test coverage
+*.coverprofile
+coverage.txt
+coverage.html
+
+# Go workspace / module cache (usually not needed in repo)
+go.work
+go.work.sum
+
+# sqlc generated code (very important!)
+# sqlc.yaml              # ← config - decide case-by-case; usually keep it
+*.sqlc.go              # old pattern some people used
+**/*.sqlc.go           # if you have .gen.go or similar
+**/sqlc/**             # if sqlc puts everything in sqlc/ folder
+internal/db/sqlc/*     # very common pattern
+db/sqlc/*
+pkg/db/sqlc/*
+**/generated/sqlc/*
+**/db/generated/*
+**/*.gen.go            # if you use .gen.go suffix for sqlc or other generators
+
+# air (live reload) temp files & config (if you don't want to commit it)
+.air/
+air_config.yaml        # ← usually keep it, but some people ignore
+air.example.yaml
+.tmp/
+
+# Development environment files (very important!)
+.env
+.env.local
+.env.development
+.env.test
+app.env
+config.yaml            # if it contains secrets
+config.local.yaml
+
+# IDE / editor files
+.vscode/
+.idea/
+*.iml
+*.sublime-project
+*.sublime-workspace
+
+# macOS junk
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Windows junk
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Logs & temp files
+*.log
+*.logs
+tmp/
+temp/
+*.tmp
+*.bak
+*.swp
+*~
+
+# Binary output folders (common patterns)
+dist/
+build/
+out/
+release/
+
+# Docker & container related (if you use them)
+docker-compose.override.yml
+*.dockerignore     # usually keep it
+
+# Optional: if using golangci-lint cache
+.golangci.yml.cache
+
+# AI 
+AGENTS.md
+.agents/
+skills-lock.json
+dotbrain
