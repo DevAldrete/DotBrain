@@ -104,7 +104,7 @@ func TestUpdateWorkflow_Success(t *testing.T) {
 		workflowDef: []byte(`{"nodes":[{"id":"1","type":"echo"}]}`),
 	}
 	queries := db.New(recorder)
-	api := &API{queries: queries}
+	api := &API{queries: queries, activeRuns: newActiveRunRegistry()}
 	router := api.NewRouter()
 
 	body := strings.NewReader(`{
@@ -152,7 +152,7 @@ func TestUpdateWorkflow_NotFound(t *testing.T) {
 		errQueries: []string{"UPDATE workflows"},
 	}
 	queries := db.New(recorder)
-	api := &API{queries: queries}
+	api := &API{queries: queries, activeRuns: newActiveRunRegistry()}
 	router := api.NewRouter()
 
 	body := strings.NewReader(`{
@@ -178,7 +178,7 @@ func TestDeleteWorkflow_Success(t *testing.T) {
 		workflowDef: []byte(`{"nodes":[]}`),
 	}
 	queries := db.New(recorder)
-	api := &API{queries: queries}
+	api := &API{queries: queries, activeRuns: newActiveRunRegistry()}
 	router := api.NewRouter()
 
 	req, _ := http.NewRequest("DELETE", "/api/v1/workflows/01961234-5678-7000-8000-000000000001", nil)
@@ -209,7 +209,7 @@ func TestDeleteWorkflow_NotFound(t *testing.T) {
 		errQueries: []string{"FROM workflows"},
 	}
 	queries := db.New(recorder)
-	api := &API{queries: queries}
+	api := &API{queries: queries, activeRuns: newActiveRunRegistry()}
 	router := api.NewRouter()
 
 	req, _ := http.NewRequest("DELETE", "/api/v1/workflows/01961234-5678-7000-8000-000000000099", nil)
@@ -248,7 +248,7 @@ func TestListWorkflowRuns_InvalidID(t *testing.T) {
 func TestListWorkflowRuns_ReturnsEmptyArray(t *testing.T) {
 	recorder := &queryRecorder{}
 	queries := db.New(recorder)
-	api := &API{queries: queries}
+	api := &API{queries: queries, activeRuns: newActiveRunRegistry()}
 	router := api.NewRouter()
 
 	w := httptest.NewRecorder()
@@ -296,7 +296,7 @@ func TestListNodeExecutionsForRun_InvalidID(t *testing.T) {
 func TestListNodeExecutionsForRun_ReturnsEmptyArray(t *testing.T) {
 	recorder := &queryRecorder{}
 	queries := db.New(recorder)
-	api := &API{queries: queries}
+	api := &API{queries: queries, activeRuns: newActiveRunRegistry()}
 	router := api.NewRouter()
 
 	w := httptest.NewRecorder()
@@ -319,7 +319,7 @@ func TestListNodeExecutionsForRun_ReturnsEmptyArray(t *testing.T) {
 func TestTriggerHandler_CreatesRunAsPending(t *testing.T) {
 	recorder := &queryRecorder{}
 	queries := db.New(recorder)
-	api := &API{queries: queries}
+	api := &API{queries: queries, activeRuns: newActiveRunRegistry()}
 
 	// We need GetWorkflow to succeed, so configure the recorder to return
 	// a scannable workflow row on the first QueryRow call

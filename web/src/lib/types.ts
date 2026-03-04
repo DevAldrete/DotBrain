@@ -63,14 +63,26 @@ export interface RetryPolicy {
 
 export type RunStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
 export type NodeStatus = 'pending' | 'running' | 'completed' | 'failed' | 'retrying';
-export type NodeType = 'echo' | 'math' | 'http' | 'llm' | 'safe_object' | 'fail' | 'counting_fail';
+export type NodeType =
+	| 'echo'
+	| 'math'
+	| 'http'
+	| 'llm'
+	| 'safe_object'
+	| 'fail'
+	| 'counting_fail'
+	| 'if'
+	| 'loop'
+	| 'set'
+	| 'merge'
+	| 'timer';
 
 // Node type metadata for the UI builder
 export interface NodeTypeMeta {
 	type: NodeType;
 	label: string;
 	description: string;
-	category: 'core' | 'integration' | 'ai';
+	category: 'core' | 'integration' | 'ai' | 'logic' | 'flow';
 	params: ParamDef[];
 }
 
@@ -98,4 +110,29 @@ export interface TriggerWorkflowRequest {
 export interface TriggerWorkflowResponse {
 	message: string;
 	run_id: string;
+}
+
+export interface CancelRunResponse {
+	message: string;
+}
+
+// Schedule types (TASK-14)
+export interface Schedule {
+	ID: string;
+	WorkflowID: string;
+	CronExpr: string;
+	Payload: string | Record<string, unknown> | null;
+	Enabled: boolean;
+	LastRunAt: string | null;
+	CreatedAt: string;
+	UpdatedAt: string;
+}
+
+export interface CreateScheduleRequest {
+	cron_expr: string;
+	payload?: Record<string, unknown>;
+}
+
+export interface UpdateScheduleRequest {
+	enabled: boolean;
 }

@@ -40,3 +40,18 @@ CREATE TABLE node_executions (
 CREATE INDEX idx_workflow_runs_status ON workflow_runs(status);
 CREATE INDEX idx_node_executions_status ON node_executions(status);
 CREATE INDEX idx_node_executions_run_id ON node_executions(workflow_run_id);
+
+-- Schedules allow workflows to be triggered on a cron schedule
+CREATE TABLE schedules (
+    id          UUID PRIMARY KEY,
+    workflow_id UUID NOT NULL REFERENCES workflows(id) ON DELETE CASCADE,
+    cron_expr   VARCHAR(100) NOT NULL,   -- standard 5-field cron expression
+    payload     JSONB NOT NULL DEFAULT '{}',
+    enabled     BOOLEAN NOT NULL DEFAULT true,
+    last_run_at TIMESTAMP WITH TIME ZONE,
+    created_at  TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+    updated_at  TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_schedules_workflow_id ON schedules(workflow_id);
+CREATE INDEX idx_schedules_enabled ON schedules(enabled);

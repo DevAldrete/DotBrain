@@ -53,6 +53,7 @@ CREATE INDEX idx_schedules_enabled ON schedules(enabled);
 | `PATCH` | `/api/v1/schedules/:id` | Enable or disable a schedule |
 
 **Create request:**
+
 ```json
 {
   "cron_expr": "0 9 * * 1-5",
@@ -61,6 +62,7 @@ CREATE INDEX idx_schedules_enabled ON schedules(enabled);
 ```
 
 **Schedule response object:**
+
 ```json
 {
   "id": "...",

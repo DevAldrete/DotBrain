@@ -20,6 +20,7 @@ This makes observing an active run a poor experience and hides one of the most c
 Add a `GET /api/v1/runs/:id/stream` endpoint that streams Server-Sent Events (SSE) as a run progresses. The frontend subscribes to this stream when viewing a run detail page and updates the UI in real time.
 
 SSE is chosen over WebSockets because:
+
 - It is one-directional (server → client), which is all that's needed here.
 - It is simpler to implement and debug.
 - It works over standard HTTP/1.1 with no protocol upgrade.

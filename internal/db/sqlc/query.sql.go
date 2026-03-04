@@ -52,6 +52,45 @@ func (q *Queries) CreateNodeExecution(ctx context.Context, arg CreateNodeExecuti
 	return i, err
 }
 
+const createSchedule = `-- name: CreateSchedule :one
+INSERT INTO schedules (
+    id, workflow_id, cron_expr, payload, enabled
+) VALUES (
+    $1, $2, $3, $4, $5
+)
+RETURNING id, workflow_id, cron_expr, payload, enabled, last_run_at, created_at, updated_at
+`
+
+type CreateScheduleParams struct {
+	ID         pgtype.UUID
+	WorkflowID pgtype.UUID
+	CronExpr   string
+	Payload    []byte
+	Enabled    bool
+}
+
+func (q *Queries) CreateSchedule(ctx context.Context, arg CreateScheduleParams) (Schedule, error) {
+	row := q.db.QueryRow(ctx, createSchedule,
+		arg.ID,
+		arg.WorkflowID,
+		arg.CronExpr,
+		arg.Payload,
+		arg.Enabled,
+	)
+	var i Schedule
+	err := row.Scan(
+		&i.ID,
+		&i.WorkflowID,
+		&i.CronExpr,
+		&i.Payload,
+		&i.Enabled,
+		&i.LastRunAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const createWorkflow = `-- name: CreateWorkflow :one
 INSERT INTO workflows (
     id, name, description, definition
@@ -131,6 +170,15 @@ DELETE FROM workflows WHERE id = $1
 
 func (q *Queries) DeleteWorkflow(ctx context.Context, id pgtype.UUID) error {
 	_, err := q.db.Exec(ctx, deleteWorkflow, id)
+	return err
+}
+
+const deleteSchedule = `-- name: DeleteSchedule :exec
+DELETE FROM schedules WHERE id = $1
+`
+
+func (q *Queries) DeleteSchedule(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, deleteSchedule, id)
 	return err
 }
 
@@ -234,6 +282,97 @@ func (q *Queries) GetWorkflowRun(ctx context.Context, id pgtype.UUID) (WorkflowR
 		&i.CreatedAt,
 	)
 	return i, err
+}
+
+const getSchedule = `-- name: GetSchedule :one
+SELECT id, workflow_id, cron_expr, payload, enabled, last_run_at, created_at, updated_at FROM schedules
+WHERE id = $1 LIMIT 1
+`
+
+func (q *Queries) GetSchedule(ctx context.Context, id pgtype.UUID) (Schedule, error) {
+	row := q.db.QueryRow(ctx, getSchedule, id)
+	var i Schedule
+	err := row.Scan(
+		&i.ID,
+		&i.WorkflowID,
+		&i.CronExpr,
+		&i.Payload,
+		&i.Enabled,
+		&i.LastRunAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const listEnabledSchedules = `-- name: ListEnabledSchedules :many
+SELECT id, workflow_id, cron_expr, payload, enabled, last_run_at, created_at, updated_at FROM schedules
+WHERE enabled = true
+ORDER BY created_at ASC
+`
+
+func (q *Queries) ListEnabledSchedules(ctx context.Context) ([]Schedule, error) {
+	rows, err := q.db.Query(ctx, listEnabledSchedules)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Schedule
+	for rows.Next() {
+		var i Schedule
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkflowID,
+			&i.CronExpr,
+			&i.Payload,
+			&i.Enabled,
+			&i.LastRunAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listSchedulesForWorkflow = `-- name: ListSchedulesForWorkflow :many
+SELECT id, workflow_id, cron_expr, payload, enabled, last_run_at, created_at, updated_at FROM schedules
+WHERE workflow_id = $1
+ORDER BY created_at DESC
+`
+
+func (q *Queries) ListSchedulesForWorkflow(ctx context.Context, workflowID pgtype.UUID) ([]Schedule, error) {
+	rows, err := q.db.Query(ctx, listSchedulesForWorkflow, workflowID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Schedule
+	for rows.Next() {
+		var i Schedule
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkflowID,
+			&i.CronExpr,
+			&i.Payload,
+			&i.Enabled,
+			&i.LastRunAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listNodeExecutionsForRun = `-- name: ListNodeExecutionsForRun :many
@@ -515,4 +654,48 @@ func (q *Queries) UpdateWorkflowRunStatus(ctx context.Context, arg UpdateWorkflo
 		&i.CreatedAt,
 	)
 	return i, err
+}
+
+const updateScheduleEnabled = `-- name: UpdateScheduleEnabled :one
+UPDATE schedules
+SET enabled = $2,
+    updated_at = NOW()
+WHERE id = $1
+RETURNING id, workflow_id, cron_expr, payload, enabled, last_run_at, created_at, updated_at
+`
+
+type UpdateScheduleEnabledParams struct {
+	ID      pgtype.UUID
+	Enabled bool
+}
+
+func (q *Queries) UpdateScheduleEnabled(ctx context.Context, arg UpdateScheduleEnabledParams) (Schedule, error) {
+	row := q.db.QueryRow(ctx, updateScheduleEnabled,
+		arg.ID,
+		arg.Enabled,
+	)
+	var i Schedule
+	err := row.Scan(
+		&i.ID,
+		&i.WorkflowID,
+		&i.CronExpr,
+		&i.Payload,
+		&i.Enabled,
+		&i.LastRunAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const updateScheduleLastRun = `-- name: UpdateScheduleLastRun :exec
+UPDATE schedules
+SET last_run_at = NOW(),
+    updated_at = NOW()
+WHERE id = $1
+`
+
+func (q *Queries) UpdateScheduleLastRun(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, updateScheduleLastRun, id)
+	return err
 }

@@ -21,6 +21,17 @@ type NodeExecution struct {
 	CreatedAt     pgtype.Timestamptz
 }
 
+type Schedule struct {
+	ID         pgtype.UUID
+	WorkflowID pgtype.UUID
+	CronExpr   string
+	Payload    []byte
+	Enabled    bool
+	LastRunAt  pgtype.Timestamptz
+	CreatedAt  pgtype.Timestamptz
+	UpdatedAt  pgtype.Timestamptz
+}
+
 type Workflow struct {
 	ID          pgtype.UUID
 	Name        string

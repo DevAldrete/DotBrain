@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/devaldrete/dotbrain/internal/api"
+	"github.com/devaldrete/dotbrain/internal/db/sqlc"
+	"github.com/devaldrete/dotbrain/internal/scheduler"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -43,7 +45,16 @@ func main() {
 		logger.Error("crash recovery failed", "error", err)
 	}
 
-	// 3b. Watchdog: periodically fail runs that exceed max duration
+	// 3b. Scheduler: cron-based workflow triggers
+	queries := db.New(pool)
+	sched := scheduler.New(queries, a.TriggerWorkflow)
+	if err := sched.LoadFromDB(context.Background()); err != nil {
+		logger.Error("scheduler: failed to load schedules from DB", "error", err)
+	}
+	sched.Start()
+	a.SetScheduler(sched)
+
+	// 3c. Watchdog: periodically fail runs that exceed max duration
 	maxDuration := 1 * time.Hour
 	if v := os.Getenv("RUN_MAX_DURATION"); v != "" {
 		if d, err := time.ParseDuration(v); err == nil {
@@ -97,8 +108,9 @@ func main() {
 	<-quit
 	logger.Info("Shutdown Server ...")
 
-	// Stop the watchdog before shutting down the server
+	// Stop the watchdog and scheduler before shutting down the server
 	watchdogCancel()
+	sched.Stop()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

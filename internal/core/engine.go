@@ -44,6 +44,21 @@ var nodeRegistry = map[string]func(map[string]any) NodeExecutor{
 	"http": func(p map[string]any) NodeExecutor {
 		return NewHttpNode(p)
 	},
+	"if": func(p map[string]any) NodeExecutor {
+		return NewIfNode(p)
+	},
+	"loop": func(p map[string]any) NodeExecutor {
+		return NewLoopNode(p)
+	},
+	"set": func(p map[string]any) NodeExecutor {
+		return NewSetNode(p)
+	},
+	"merge": func(p map[string]any) NodeExecutor {
+		return NewMergeNode(p)
+	},
+	"timer": func(p map[string]any) NodeExecutor {
+		return NewTimerNode(p)
+	},
 }
 
 // NodeLifecycleHook provides callbacks during node execution.

@@ -15,7 +15,7 @@ import (
 func TestRecoverStaleRuns_MarksRunningAsFailed(t *testing.T) {
 	recorder := &queryRecorder{}
 	queries := db.New(recorder)
-	api := &API{queries: queries}
+	api := &API{queries: queries, activeRuns: newActiveRunRegistry()}
 
 	err := api.RecoverStaleRuns(context.Background())
 	if err != nil {
@@ -51,7 +51,7 @@ func TestRecoverStaleRuns_MarksRunningAsFailed(t *testing.T) {
 func TestRecoverStaleRuns_DoesNotTouchCompletedRuns(t *testing.T) {
 	recorder := &queryRecorder{}
 	queries := db.New(recorder)
-	api := &API{queries: queries}
+	api := &API{queries: queries, activeRuns: newActiveRunRegistry()}
 
 	err := api.RecoverStaleRuns(context.Background())
 	if err != nil {
@@ -85,7 +85,7 @@ func TestRecoverStaleRuns_DoesNotTouchCompletedRuns(t *testing.T) {
 func TestWatchdog_TimesOutLongRunningRun(t *testing.T) {
 	recorder := &queryRecorder{}
 	queries := db.New(recorder)
-	api := &API{queries: queries}
+	api := &API{queries: queries, activeRuns: newActiveRunRegistry()}
 
 	maxDuration := 1 * time.Hour
 	before := time.Now()

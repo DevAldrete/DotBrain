@@ -102,3 +102,41 @@ SET status = 'failed',
     completed_at = NOW()
 WHERE status = 'running'
   AND started_at < $2;
+
+-- name: CreateSchedule :one
+INSERT INTO schedules (
+    id, workflow_id, cron_expr, payload, enabled
+) VALUES (
+    $1, $2, $3, $4, $5
+)
+RETURNING *;
+
+-- name: GetSchedule :one
+SELECT * FROM schedules
+WHERE id = $1 LIMIT 1;
+
+-- name: ListSchedulesForWorkflow :many
+SELECT * FROM schedules
+WHERE workflow_id = $1
+ORDER BY created_at DESC;
+
+-- name: ListEnabledSchedules :many
+SELECT * FROM schedules
+WHERE enabled = true
+ORDER BY created_at ASC;
+
+-- name: DeleteSchedule :exec
+DELETE FROM schedules WHERE id = $1;
+
+-- name: UpdateScheduleEnabled :one
+UPDATE schedules
+SET enabled = $2,
+    updated_at = NOW()
+WHERE id = $1
+RETURNING *;
+
+-- name: UpdateScheduleLastRun :exec
+UPDATE schedules
+SET last_run_at = NOW(),
+    updated_at = NOW()
+WHERE id = $1;

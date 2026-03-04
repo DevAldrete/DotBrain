@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"time"
 
 	"github.com/devaldrete/dotbrain/internal/core"
 	"github.com/devaldrete/dotbrain/internal/db/sqlc"
+	"github.com/devaldrete/dotbrain/internal/scheduler"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -17,8 +19,10 @@ import (
 )
 
 type API struct {
-	pool    *pgxpool.Pool
-	queries *db.Queries
+	pool       *pgxpool.Pool
+	queries    *db.Queries
+	activeRuns activeRunRegistry
+	scheduler  *scheduler.Scheduler
 }
 
 func NewAPI(pool *pgxpool.Pool) *API {
@@ -27,9 +31,16 @@ func NewAPI(pool *pgxpool.Pool) *API {
 		queries = db.New(pool)
 	}
 	return &API{
-		pool:    pool,
-		queries: queries,
+		pool:       pool,
+		queries:    queries,
+		activeRuns: newActiveRunRegistry(),
 	}
+}
+
+// SetScheduler sets the scheduler instance on the API. Called after both
+// the API and scheduler are initialized (avoids circular dependency).
+func (a *API) SetScheduler(s *scheduler.Scheduler) {
+	a.scheduler = s
 }
 
 // NewRouter initializes and returns a configured *gin.Engine router.
@@ -67,6 +78,13 @@ func (a *API) NewRouter() *gin.Engine {
 		// Run Endpoints
 		v1.GET("/runs/:id", a.getRunHandler)
 		v1.GET("/runs/:id/nodes", a.listNodeExecutionsHandler)
+		v1.POST("/runs/:id/cancel", a.cancelRunHandler)
+
+		// Schedule Endpoints
+		v1.POST("/workflows/:id/schedules", a.createScheduleHandler)
+		v1.GET("/workflows/:id/schedules", a.listSchedulesHandler)
+		v1.DELETE("/schedules/:id", a.deleteScheduleHandler)
+		v1.PATCH("/schedules/:id", a.updateScheduleHandler)
 	}
 
 	return r
@@ -143,12 +161,16 @@ func (a *API) workflowTriggerHandler(c *gin.Context) {
 		return
 	}
 
-	// Run workflow asynchronously
-	go func(runID pgtype.UUID, w db.Workflow, initialData map[string]any) {
-		ctx := context.Background()
+	// Run workflow asynchronously with cancellable context
+	runCtx, cancelRun := context.WithCancel(context.Background())
+	a.activeRuns.register(runID.String(), cancelRun)
+
+	go func(runID pgtype.UUID, runIDStr string, w db.Workflow, initialData map[string]any) {
+		defer a.activeRuns.deregister(runIDStr)
+		defer cancelRun()
 
 		// Transition to "running" with started_at
-		a.transitionToRunning(ctx, runID)
+		a.transitionToRunning(runCtx, runID)
 
 		// Setup Engine
 		engine := core.NewEngine()
@@ -156,23 +178,27 @@ func (a *API) workflowTriggerHandler(c *gin.Context) {
 
 		def, err := core.ParseDefinition(w.Definition)
 		if err != nil {
-			a.updateRunStatus(ctx, runID, "failed", nil, err.Error())
+			a.updateRunStatus(context.Background(), runID, "failed", nil, err.Error())
 			return
 		}
 
 		if err := engine.LoadFromDefinition(def); err != nil {
-			a.updateRunStatus(ctx, runID, "failed", nil, err.Error())
+			a.updateRunStatus(context.Background(), runID, "failed", nil, err.Error())
 			return
 		}
 
-		output, err := engine.Execute(ctx, initialData)
+		output, err := engine.Execute(runCtx, initialData)
 		if err != nil {
-			a.updateRunStatus(ctx, runID, "failed", nil, err.Error())
+			if errors.Is(err, context.Canceled) {
+				a.updateRunStatus(context.Background(), runID, "cancelled", nil, "run was cancelled")
+			} else {
+				a.updateRunStatus(context.Background(), runID, "failed", nil, err.Error())
+			}
 			return
 		}
 
-		a.updateRunStatus(ctx, runID, "completed", output, "")
-	}(pgRunID, workflow, payload)
+		a.updateRunStatus(context.Background(), runID, "completed", output, "")
+	}(pgRunID, runID.String(), workflow, payload)
 
 	c.JSON(http.StatusAccepted, gin.H{
 		"message": "workflow queued for execution",
@@ -448,4 +474,106 @@ func (a *API) listNodeExecutionsHandler(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, executions)
+}
+
+// cancelRunHandler handles POST /runs/:id/cancel
+func (a *API) cancelRunHandler(c *gin.Context) {
+	idStr := c.Param("id")
+	parsedID, err := uuid.Parse(idStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid run ID"})
+		return
+	}
+
+	var pgID pgtype.UUID
+	pgID.Bytes = parsedID
+	pgID.Valid = true
+
+	run, err := a.queries.GetWorkflowRun(c, pgID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "run not found"})
+		return
+	}
+
+	if run.Status != "pending" && run.Status != "running" {
+		c.JSON(http.StatusConflict, gin.H{
+			"error": fmt.Sprintf("run is already in terminal state: %s", run.Status),
+		})
+		return
+	}
+
+	// If the run is active in this process, cancel via context
+	found := a.activeRuns.cancel(idStr)
+
+	if !found {
+		// Run is pending or was started on a different instance.
+		// Mark cancelled directly in the DB.
+		a.updateRunStatus(c, pgID, "cancelled", nil, "run cancelled by user")
+	}
+
+	c.JSON(http.StatusAccepted, gin.H{"message": "cancellation requested"})
+}
+
+// TriggerWorkflow is the internal trigger function used by both the HTTP handler
+// and the scheduler. It creates a run and executes it asynchronously.
+func (a *API) TriggerWorkflow(ctx context.Context, workflowID pgtype.UUID, payload map[string]any) error {
+	workflow, err := a.queries.GetWorkflow(ctx, workflowID)
+	if err != nil {
+		return fmt.Errorf("workflow not found: %w", err)
+	}
+
+	runID, _ := uuid.NewV7()
+	var pgRunID pgtype.UUID
+	pgRunID.Bytes = runID
+	pgRunID.Valid = true
+
+	inputBytes, _ := json.Marshal(payload)
+
+	_, err = a.queries.CreateWorkflowRun(ctx, db.CreateWorkflowRunParams{
+		ID:         pgRunID,
+		WorkflowID: workflowID,
+		Status:     "pending",
+		InputData:  inputBytes,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to create workflow run: %w", err)
+	}
+
+	runCtx, cancelRun := context.WithCancel(context.Background())
+	a.activeRuns.register(runID.String(), cancelRun)
+
+	go func(runID pgtype.UUID, runIDStr string, w db.Workflow, initialData map[string]any) {
+		defer a.activeRuns.deregister(runIDStr)
+		defer cancelRun()
+
+		a.transitionToRunning(runCtx, runID)
+
+		engine := core.NewEngine()
+		engine.Hook = NewDBNodeHook(a.queries, runID)
+
+		def, err := core.ParseDefinition(w.Definition)
+		if err != nil {
+			a.updateRunStatus(context.Background(), runID, "failed", nil, err.Error())
+			return
+		}
+
+		if err := engine.LoadFromDefinition(def); err != nil {
+			a.updateRunStatus(context.Background(), runID, "failed", nil, err.Error())
+			return
+		}
+
+		output, err := engine.Execute(runCtx, initialData)
+		if err != nil {
+			if errors.Is(err, context.Canceled) {
+				a.updateRunStatus(context.Background(), runID, "cancelled", nil, "run was cancelled")
+			} else {
+				a.updateRunStatus(context.Background(), runID, "failed", nil, err.Error())
+			}
+			return
+		}
+
+		a.updateRunStatus(context.Background(), runID, "completed", output, "")
+	}(pgRunID, runID.String(), workflow, payload)
+
+	return nil
 }
