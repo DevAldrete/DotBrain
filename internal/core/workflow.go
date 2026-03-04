@@ -17,9 +17,18 @@ type EdgeConfig struct {
 
 // NodeConfig specifies a single execution step
 type NodeConfig struct {
-	ID     string         `json:"id"`
-	Type   string         `json:"type"`
-	Params map[string]any `json:"params,omitempty"`
+	ID          string         `json:"id"`
+	Type        string         `json:"type"`
+	Params      map[string]any `json:"params,omitempty"`
+	RetryPolicy *RetryPolicy   `json:"retry_policy,omitempty"`
+}
+
+// RetryPolicy configures retry behavior for a node on failure.
+type RetryPolicy struct {
+	MaxAttempts     int     `json:"max_attempts"`        // total attempts including the first; default 1 (no retry)
+	InitialInterval int     `json:"initial_interval_ms"` // milliseconds; default 1000
+	BackoffFactor   float64 `json:"backoff_factor"`      // multiplier per attempt; default 2.0
+	MaxInterval     int     `json:"max_interval_ms"`     // cap on backoff; default 30000 (30s)
 }
 
 // ParseDefinition parses the JSONB array from the database into a WorkflowDefinition

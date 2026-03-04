@@ -4,11 +4,19 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 )
 
 var nodeRegistry = map[string]func(map[string]any) NodeExecutor{
 	"echo": func(p map[string]any) NodeExecutor { return EchoNode{} },
 	"fail": func(p map[string]any) NodeExecutor { return FailNode{} },
+	"counting_fail": func(p map[string]any) NodeExecutor {
+		failTimes := 0
+		if v, ok := p["fail_times"].(float64); ok {
+			failTimes = int(v)
+		}
+		return &CountingFailNode{FailTimes: failTimes}
+	},
 	"math": func(p map[string]any) NodeExecutor {
 		node := MathNode{}
 		if val, ok := p["a"].(float64); ok {
@@ -43,6 +51,7 @@ type NodeLifecycleHook interface {
 	OnNodeStart(ctx context.Context, nodeID string, input map[string]any)
 	OnNodeComplete(ctx context.Context, nodeID string, output map[string]any)
 	OnNodeFail(ctx context.Context, nodeID string, err error)
+	OnNodeRetry(ctx context.Context, nodeID string, attempt int, err error)
 }
 
 type registeredNode struct {
@@ -52,9 +61,10 @@ type registeredNode struct {
 
 // dagNode represents a node in the DAG with its executor, dependencies, and outgoing edges.
 type dagNode struct {
-	id       string
-	executor NodeExecutor
-	params   map[string]any
+	id          string
+	executor    NodeExecutor
+	params      map[string]any
+	retryPolicy *RetryPolicy
 }
 
 // Engine is an orchestrator that executes nodes either sequentially or as a DAG.
@@ -167,9 +177,10 @@ func (e *Engine) LoadFromDefinition(def *WorkflowDefinition) error {
 			params = map[string]any{}
 		}
 		dagNodes[config.ID] = &dagNode{
-			id:       config.ID,
-			executor: factory(params),
-			params:   params,
+			id:          config.ID,
+			executor:    factory(params),
+			params:      params,
+			retryPolicy: config.RetryPolicy,
 		}
 	}
 
@@ -272,6 +283,7 @@ func (e *Engine) executeDAG(ctx context.Context, input map[string]any) (map[stri
 	deactivated := make(map[string]bool)
 
 	var lastOutput map[string]any
+	var terminalErr error // tracks unhandled node failures
 
 	// Process nodes in topological batches
 	for len(ready) > 0 {
@@ -305,7 +317,7 @@ func (e *Engine) executeDAG(ctx context.Context, input map[string]any) (map[stri
 					e.Hook.OnNodeStart(ctx, n.id, nodeInput)
 				}
 
-				output, err := n.executor.Execute(ctx, nodeInput)
+				output, err := e.executeWithRetry(ctx, n, nodeInput)
 				resultsCh <- nodeResult{id: n.id, output: output, err: err}
 			}(node, resolvedInput)
 		}
@@ -329,6 +341,18 @@ func (e *Engine) executeDAG(ctx context.Context, input map[string]any) (map[stri
 			} else {
 				if e.Hook != nil {
 					e.Hook.OnNodeFail(ctx, nodeID, result.err)
+				}
+
+				// Check if this failure is handled by a failure edge
+				hasFailureEdge := false
+				for _, edge := range outEdges[nodeID] {
+					if edge.Condition == "failure" {
+						hasFailureEdge = true
+						break
+					}
+				}
+				if !hasFailureEdge {
+					terminalErr = fmt.Errorf("node %s failed: %w", nodeID, result.err)
 				}
 			}
 
@@ -357,6 +381,9 @@ func (e *Engine) executeDAG(ctx context.Context, input map[string]any) (map[stri
 		}
 	}
 
+	if terminalErr != nil {
+		return nil, terminalErr
+	}
 	if lastOutput != nil {
 		return lastOutput, nil
 	}
@@ -436,4 +463,68 @@ func (e *Engine) resolveTemplates(params map[string]any, input map[string]any) m
 	}
 
 	return resolved
+}
+
+// executeWithRetry runs a node's executor, retrying according to its RetryPolicy.
+// If the node has no retry policy, it executes once (original behavior).
+// On each failed attempt (except the last), it calls OnNodeRetry and waits for
+// the backoff duration, respecting context cancellation.
+func (e *Engine) executeWithRetry(ctx context.Context, n *dagNode, input map[string]any) (map[string]any, error) {
+	maxAttempts := 1
+	if n.retryPolicy != nil && n.retryPolicy.MaxAttempts > 1 {
+		maxAttempts = n.retryPolicy.MaxAttempts
+	}
+
+	var lastErr error
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		output, err := n.executor.Execute(ctx, input)
+		if err == nil {
+			return output, nil
+		}
+
+		lastErr = err
+
+		// If this was the last attempt, don't retry
+		if attempt == maxAttempts {
+			break
+		}
+
+		// Fire retry hook
+		if e.Hook != nil {
+			e.Hook.OnNodeRetry(ctx, n.id, attempt, err)
+		}
+
+		// Wait for backoff, respecting context cancellation
+		backoff := BackoffDuration(n.retryPolicy, attempt)
+		select {
+		case <-time.After(backoff):
+			// continue to next attempt
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+
+	return nil, lastErr
+}
+
+// BackoffDuration calculates the backoff wait time for a given retry attempt.
+// attempt is 1-indexed (attempt 1 = first retry after initial failure).
+// Formula: min(initialInterval * backoffFactor^(attempt-1), maxInterval).
+func BackoffDuration(policy *RetryPolicy, attempt int) time.Duration {
+	base := float64(policy.InitialInterval)
+	factor := policy.BackoffFactor
+
+	// Calculate: initialInterval * factor^(attempt-1)
+	multiplier := 1.0
+	for i := 1; i < attempt; i++ {
+		multiplier *= factor
+	}
+	ms := base * multiplier
+
+	// Cap at MaxInterval
+	if max := float64(policy.MaxInterval); ms > max {
+		ms = max
+	}
+
+	return time.Duration(ms) * time.Millisecond
 }

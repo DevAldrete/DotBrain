@@ -21,6 +21,22 @@ func (f FailNode) Execute(ctx context.Context, input map[string]any) (map[string
 	return nil, fmt.Errorf("this node always fails")
 }
 
+// CountingFailNode fails the first FailTimes invocations and then succeeds
+// by returning the input (like EchoNode). It is safe for concurrent use
+// because each instance is only used by a single DAG node.
+type CountingFailNode struct {
+	FailTimes int
+	calls     int
+}
+
+func (c *CountingFailNode) Execute(ctx context.Context, input map[string]any) (map[string]any, error) {
+	c.calls++
+	if c.calls <= c.FailTimes {
+		return nil, fmt.Errorf("counting_fail: attempt %d of %d", c.calls, c.FailTimes)
+	}
+	return input, nil
+}
+
 type MathNode struct {
 	A *float64
 	B *float64

@@ -23,9 +23,17 @@ type EdgeConfig struct {
 }
 
 type NodeConfig struct {
-    ID     string         `json:"id"`
-    Type   string         `json:"type"`
-    Params map[string]any `json:"params,omitempty"`
+    ID          string         `json:"id"`
+    Type        string         `json:"type"`
+    Params      map[string]any `json:"params,omitempty"`
+    RetryPolicy *RetryPolicy   `json:"retry_policy,omitempty"`
+}
+
+type RetryPolicy struct {
+    MaxAttempts     int     `json:"max_attempts"`        // total attempts including the first; default 1 (no retry)
+    InitialInterval int     `json:"initial_interval_ms"` // milliseconds; default 1000
+    BackoffFactor   float64 `json:"backoff_factor"`      // multiplier per attempt; default 2.0
+    MaxInterval     int     `json:"max_interval_ms"`     // cap on backoff; default 30000 (30s)
 }
 ```
 
@@ -39,7 +47,13 @@ type NodeConfig struct {
     {
       "id": "<unique-string>",
       "type": "<node-type>",
-      "params": { }
+      "params": { },
+      "retry_policy": {
+        "max_attempts": 3,
+        "initial_interval_ms": 1000,
+        "backoff_factor": 2.0,
+        "max_interval_ms": 30000
+      }
     }
   ],
   "edges": [
@@ -60,6 +74,11 @@ type NodeConfig struct {
 | `nodes[].id` | string | yes | Must be unique within the workflow. Used as the `node_id` in `node_executions` rows. |
 | `nodes[].type` | string | yes | Must match a key in the engine's node registry: `echo`, `fail`, `math`, `http`, `llm`, `safe_object`. |
 | `nodes[].params` | object | no | Node-specific configuration. See [nodes.md](nodes.md) for each type's param schema. Omit or set to `{}` for nodes with no params. |
+| `nodes[].retry_policy` | object | no | Retry configuration for this node on failure. If omitted, the node runs once (no retry). See below for fields. |
+| `nodes[].retry_policy.max_attempts` | int | yes | Total attempts including the initial try. `3` means 1 initial + 2 retries. |
+| `nodes[].retry_policy.initial_interval_ms` | int | yes | Backoff delay in milliseconds before the first retry. |
+| `nodes[].retry_policy.backoff_factor` | float | yes | Multiplier applied per retry. `2.0` = exponential doubling. `1.0` = constant interval. |
+| `nodes[].retry_policy.max_interval_ms` | int | yes | Upper bound on the backoff delay. Prevents unbounded wait times. |
 | `edges` | array | no | Connections between nodes forming a DAG. If omitted, edges are inferred from node order (linear execution). |
 | `edges[].from` | string | yes | Source node ID. Must match a `nodes[].id`. |
 | `edges[].to` | string | yes | Target node ID. Must match a `nodes[].id`. |
@@ -255,3 +274,45 @@ trigger payload → start
 ```
 
 Nodes at the same depth with zero remaining in-degree execute concurrently.
+
+---
+
+### Retry with exponential backoff
+
+Retry a flaky HTTP call up to 5 times with exponential backoff (1s, 2s, 4s, 8s) capped at 10s:
+
+```json
+{
+  "nodes": [
+    {
+      "id": "fetch-data",
+      "type": "http",
+      "params": {
+        "url": "https://api.example.com/unstable-endpoint",
+        "method": "GET"
+      },
+      "retry_policy": {
+        "max_attempts": 5,
+        "initial_interval_ms": 1000,
+        "backoff_factor": 2.0,
+        "max_interval_ms": 10000
+      }
+    },
+    {
+      "id": "process",
+      "type": "llm",
+      "params": { "prompt": "Summarize: {{input.body}}" }
+    }
+  ],
+  "edges": [
+    { "from": "fetch-data", "to": "process" }
+  ]
+}
+```
+
+**Behavior:**
+
+- Attempt 1 fails → wait 1s → attempt 2 fails → wait 2s → attempt 3 succeeds → continue to `process`
+- If all 5 attempts fail, the node is marked `failed` and the `OnNodeFail` hook fires
+- The `OnNodeRetry` lifecycle hook fires before each retry wait, enabling status tracking
+- Context cancellation (e.g., workflow timeout) aborts the retry wait immediately

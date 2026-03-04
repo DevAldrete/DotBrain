@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"time"
 
 	"github.com/devaldrete/dotbrain/internal/db/sqlc"
@@ -12,10 +13,10 @@ import (
 
 // DBNodeHook implements core.NodeLifecycleHook to record node executions in the database.
 type DBNodeHook struct {
-	queries     *db.Queries
-	runID       pgtype.UUID
-	executions  map[string]pgtype.UUID
-	startTimes  map[string]time.Time
+	queries    *db.Queries
+	runID      pgtype.UUID
+	executions map[string]pgtype.UUID
+	startTimes map[string]time.Time
 }
 
 // NewDBNodeHook creates a new DBNodeHook.
@@ -114,5 +115,25 @@ func (h *DBNodeHook) OnNodeFail(ctx context.Context, nodeID string, err error) {
 		Error:       pgErr,
 		StartedAt:   pgStartedAt,
 		CompletedAt: pgCompletedAt,
+	})
+}
+
+// OnNodeRetry records that a node is being retried.
+func (h *DBNodeHook) OnNodeRetry(ctx context.Context, nodeID string, attempt int, err error) {
+	executionID, ok := h.executions[nodeID]
+	if !ok {
+		return
+	}
+
+	var pgErr pgtype.Text
+	if err != nil {
+		pgErr.String = fmt.Sprintf("attempt %d: %s", attempt, err.Error())
+		pgErr.Valid = true
+	}
+
+	_, _ = h.queries.UpdateNodeExecutionStatus(ctx, db.UpdateNodeExecutionStatusParams{
+		ID:     executionID,
+		Status: "retrying",
+		Error:  pgErr,
 	})
 }

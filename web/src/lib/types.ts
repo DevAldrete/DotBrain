@@ -51,11 +51,19 @@ export interface NodeConfig {
 	id: string;
 	type: NodeType;
 	params?: Record<string, unknown>;
+	retry_policy?: RetryPolicy;
+}
+
+export interface RetryPolicy {
+	max_attempts: number;       // total attempts including the first; default 1 (no retry)
+	initial_interval_ms: number; // milliseconds; default 1000
+	backoff_factor: number;      // multiplier per attempt; default 2.0
+	max_interval_ms: number;     // cap on backoff; default 30000 (30s)
 }
 
 export type RunStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
 export type NodeStatus = 'pending' | 'running' | 'completed' | 'failed' | 'retrying';
-export type NodeType = 'echo' | 'math' | 'http' | 'llm' | 'safe_object' | 'fail';
+export type NodeType = 'echo' | 'math' | 'http' | 'llm' | 'safe_object' | 'fail' | 'counting_fail';
 
 // Node type metadata for the UI builder
 export interface NodeTypeMeta {

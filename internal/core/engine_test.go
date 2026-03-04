@@ -3,6 +3,7 @@ package core_test
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/devaldrete/dotbrain/internal/core"
 )
@@ -119,6 +120,7 @@ type recordingHook struct {
 	starts    []string
 	completes []string
 	failures  []string
+	retries   []string
 }
 
 func (h *recordingHook) OnNodeStart(ctx context.Context, nodeID string, input map[string]any) {
@@ -131,6 +133,10 @@ func (h *recordingHook) OnNodeComplete(ctx context.Context, nodeID string, outpu
 
 func (h *recordingHook) OnNodeFail(ctx context.Context, nodeID string, err error) {
 	h.failures = append(h.failures, nodeID)
+}
+
+func (h *recordingHook) OnNodeRetry(ctx context.Context, nodeID string, attempt int, err error) {
+	h.retries = append(h.retries, nodeID)
 }
 
 // TestEngine_Execute_CallsHookForEachNode verifies that the lifecycle hook
@@ -404,5 +410,207 @@ func TestEngine_DAG_BackwardCompat(t *testing.T) {
 
 	if hook.completes[0] != "A" || hook.completes[1] != "B" || hook.completes[2] != "C" {
 		t.Errorf("unexpected execution order: %v", hook.completes)
+	}
+}
+
+// --- Retry / Backoff Tests ---
+
+// TestBackoffDuration verifies the exponential backoff calculation.
+func TestBackoffDuration(t *testing.T) {
+	policy := &core.RetryPolicy{
+		MaxAttempts:     5,
+		InitialInterval: 100,
+		BackoffFactor:   2.0,
+		MaxInterval:     1000,
+	}
+
+	tests := []struct {
+		attempt  int
+		expected time.Duration
+	}{
+		{1, 100 * time.Millisecond},  // 100 * 2^0 = 100
+		{2, 200 * time.Millisecond},  // 100 * 2^1 = 200
+		{3, 400 * time.Millisecond},  // 100 * 2^2 = 400
+		{4, 800 * time.Millisecond},  // 100 * 2^3 = 800
+		{5, 1000 * time.Millisecond}, // 100 * 2^4 = 1600, capped to 1000
+	}
+
+	for _, tc := range tests {
+		got := core.BackoffDuration(policy, tc.attempt)
+		if got != tc.expected {
+			t.Errorf("attempt %d: expected %v, got %v", tc.attempt, tc.expected, got)
+		}
+	}
+}
+
+// TestEngine_Retry_SucceedsOnSecondAttempt verifies that a node with retry policy
+// succeeds when it fails once then succeeds on the second attempt.
+func TestEngine_Retry_SucceedsOnSecondAttempt(t *testing.T) {
+	def := &core.WorkflowDefinition{
+		Nodes: []core.NodeConfig{
+			{
+				ID:   "flaky",
+				Type: "counting_fail",
+				Params: map[string]any{
+					"fail_times": 1.0, // fail once, then succeed
+				},
+				RetryPolicy: &core.RetryPolicy{
+					MaxAttempts:     3,
+					InitialInterval: 1, // 1ms for fast tests
+					BackoffFactor:   1.0,
+					MaxInterval:     10,
+				},
+			},
+		},
+	}
+
+	engine := core.NewEngine()
+	hook := &recordingHook{}
+	engine.Hook = hook
+
+	err := engine.LoadFromDefinition(def)
+	if err != nil {
+		t.Fatalf("load error: %v", err)
+	}
+
+	result, err := engine.Execute(context.Background(), map[string]any{"value": "hello"})
+	if err != nil {
+		t.Fatalf("expected success after retry, got error: %v", err)
+	}
+
+	if result["value"] != "hello" {
+		t.Errorf("expected value=hello, got %v", result["value"])
+	}
+
+	// Should have 1 retry call (failed once before succeeding)
+	if len(hook.retries) != 1 {
+		t.Errorf("expected 1 OnNodeRetry call, got %d", len(hook.retries))
+	}
+
+	// Should have completed successfully
+	if len(hook.completes) != 1 {
+		t.Errorf("expected 1 OnNodeComplete call, got %d", len(hook.completes))
+	}
+
+	// Should NOT have a final failure
+	if len(hook.failures) != 0 {
+		t.Errorf("expected 0 OnNodeFail calls, got %d", len(hook.failures))
+	}
+}
+
+// TestEngine_Retry_ExhaustsAllAttempts verifies that a node that always fails
+// exhausts all retry attempts and then the run fails.
+func TestEngine_Retry_ExhaustsAllAttempts(t *testing.T) {
+	def := &core.WorkflowDefinition{
+		Nodes: []core.NodeConfig{
+			{
+				ID:   "always-fail",
+				Type: "fail",
+				RetryPolicy: &core.RetryPolicy{
+					MaxAttempts:     3,
+					InitialInterval: 1,
+					BackoffFactor:   1.0,
+					MaxInterval:     10,
+				},
+			},
+		},
+	}
+
+	engine := core.NewEngine()
+	hook := &recordingHook{}
+	engine.Hook = hook
+
+	err := engine.LoadFromDefinition(def)
+	if err != nil {
+		t.Fatalf("load error: %v", err)
+	}
+
+	_, err = engine.Execute(context.Background(), map[string]any{})
+
+	// Should have 2 retry calls (attempt 1 and 2 trigger retries, attempt 3 is final failure)
+	if len(hook.retries) != 2 {
+		t.Errorf("expected 2 OnNodeRetry calls, got %d", len(hook.retries))
+	}
+
+	// Should have 1 final failure
+	if len(hook.failures) != 1 {
+		t.Errorf("expected 1 OnNodeFail call, got %d", len(hook.failures))
+	}
+}
+
+// TestEngine_Retry_RespectsContext verifies that a cancelled context aborts the
+// retry wait immediately rather than waiting for the full backoff duration.
+func TestEngine_Retry_RespectsContext(t *testing.T) {
+	def := &core.WorkflowDefinition{
+		Nodes: []core.NodeConfig{
+			{
+				ID:   "slow-retry",
+				Type: "fail",
+				RetryPolicy: &core.RetryPolicy{
+					MaxAttempts:     10,
+					InitialInterval: 60000, // 60 seconds — we should NOT wait this long
+					BackoffFactor:   1.0,
+					MaxInterval:     60000,
+				},
+			},
+		},
+	}
+
+	engine := core.NewEngine()
+
+	err := engine.LoadFromDefinition(def)
+	if err != nil {
+		t.Fatalf("load error: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	_, err = engine.Execute(ctx, map[string]any{})
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("expected error from cancelled context, got nil")
+	}
+
+	// Should have exited quickly (well under the 60s backoff)
+	if elapsed > 2*time.Second {
+		t.Errorf("retry did not respect context cancellation, took %v", elapsed)
+	}
+}
+
+// TestEngine_Retry_NoPolicy_NoChange verifies that a node with no retry policy
+// fails on the first error with no retry, identical to the existing behavior.
+func TestEngine_Retry_NoPolicy_NoChange(t *testing.T) {
+	def := &core.WorkflowDefinition{
+		Nodes: []core.NodeConfig{
+			{
+				ID:   "no-retry",
+				Type: "fail",
+				// No RetryPolicy
+			},
+		},
+	}
+
+	engine := core.NewEngine()
+	hook := &recordingHook{}
+	engine.Hook = hook
+
+	err := engine.LoadFromDefinition(def)
+	if err != nil {
+		t.Fatalf("load error: %v", err)
+	}
+
+	_, err = engine.Execute(context.Background(), map[string]any{})
+
+	// Should have 0 retries
+	if len(hook.retries) != 0 {
+		t.Errorf("expected 0 OnNodeRetry calls, got %d", len(hook.retries))
+	}
+
+	// Should have 1 failure
+	if len(hook.failures) != 1 {
+		t.Errorf("expected 1 OnNodeFail call, got %d", len(hook.failures))
 	}
 }
