@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { page } from '$app/state';
-	import { getWorkflowRun, listNodeExecutions } from '$lib/api';
+	import { getWorkflowRun, listNodeExecutions, cancelRun } from '$lib/api';
 	import type { WorkflowRun, NodeExecution } from '$lib/types';
 	import { timeAgo, duration, prettyData, formatDate } from '$lib/utils';
 	import { getNodeMeta } from '$lib/nodes';
@@ -16,6 +16,30 @@
 	let expandedNode = $state<string | null>(null);
 	let polling = $state(false);
 	let pollTimer = $state<ReturnType<typeof setInterval> | null>(null);
+	let cancelling = $state(false);
+	let cancelError = $state<string | null>(null);
+
+	const isActive = $derived(run?.Status === 'pending' || run?.Status === 'running');
+
+	async function handleCancel() {
+		if (!run || cancelling) return;
+		cancelling = true;
+		cancelError = null;
+		try {
+			await cancelRun(id);
+			// Reload data to get updated status
+			const [r, n] = await Promise.all([
+				getWorkflowRun(id),
+				listNodeExecutions(id)
+			]);
+			run = r;
+			nodes = n;
+		} catch (e) {
+			cancelError = e instanceof Error ? e.message : 'Failed to cancel run';
+		} finally {
+			cancelling = false;
+		}
+	}
 
 	onMount(() => {
 		loadData();
@@ -120,7 +144,39 @@
 				</div>
 				<p class="text-xs font-mono text-muted">{run.ID}</p>
 			</div>
+			{#if isActive}
+				<button
+					onclick={handleCancel}
+					disabled={cancelling}
+					class="flex items-center gap-2 border border-red-500/30 bg-red-500/5 text-red-400 font-bold text-xs uppercase tracking-wider px-5 py-3 hover:bg-red-500/10 hover:border-red-500/50 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
+				>
+					{#if cancelling}
+						<svg class="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
+							<circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+							<path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+						</svg>
+						Cancelling...
+					{:else}
+						<svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+							<path stroke-linecap="round" stroke-linejoin="round" d="M5.25 7.5A2.25 2.25 0 017.5 5.25h9a2.25 2.25 0 012.25 2.25v9a2.25 2.25 0 01-2.25 2.25h-9a2.25 2.25 0 01-2.25-2.25v-9z" />
+						</svg>
+						Cancel Run
+					{/if}
+				</button>
+			{/if}
 		</div>
+
+		<!-- Cancel Error -->
+		{#if cancelError}
+			<div class="bg-red-500/5 border border-red-500/20 rounded-sm p-4 mb-6 slide-up">
+				<div class="flex items-center gap-2">
+					<svg class="w-4 h-4 text-red-400 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+						<path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z" />
+					</svg>
+					<span class="text-sm font-mono text-red-400">{cancelError}</span>
+				</div>
+			</div>
+		{/if}
 
 		<!-- Stats Row -->
 		<div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-10 slide-up stagger-2">
