@@ -125,6 +125,49 @@ Retrieves a single workflow by UUID.
 
 ---
 
+### `PUT /api/v1/workflows/:id`
+
+Replaces all mutable fields of a workflow (full replacement, not partial patch). Uses the same request body shape as `POST /api/v1/workflows`.
+
+**Path param:** `id` — UUID v7 string.
+
+**Request body:**
+```json
+{
+  "name": "Updated Pipeline Name",
+  "description": "Updated description",
+  "definition": {
+    "nodes": [
+      { "id": "step-1", "type": "echo" }
+    ]
+  }
+}
+```
+
+All fields are required. `updated_at` is set to `NOW()`. The `id` and `created_at` are never modified.
+
+> Existing runs keep the definition they were triggered with. Updating a workflow does not retroactively change past runs.
+
+**Response 200:** the updated workflow object.
+**Response 400:** invalid UUID, invalid JSON, or missing required fields.
+**Response 404:** workflow not found.
+**Response 500:** database error.
+
+---
+
+### `DELETE /api/v1/workflows/:id`
+
+Permanently deletes the workflow and all its associated runs and node executions (via `ON DELETE CASCADE`).
+
+**Path param:** `id` — UUID v7 string.
+
+**Response 204:** no content.
+**Response 400:** invalid UUID.
+**Response 404:** workflow not found.
+**Response 500:** database error.
+
+---
+
 ### `POST /api/v1/workflows/:id/trigger`
 
 Triggers a new execution of the workflow. Creates a `workflow_run` row and immediately returns a `run_id`. Execution happens asynchronously in a goroutine.
@@ -258,12 +301,14 @@ All error responses use the same envelope:
 | `POST` | `/api/v1/workflows` | Create workflow |
 | `GET` | `/api/v1/workflows` | List workflows |
 | `GET` | `/api/v1/workflows/:id` | Get workflow |
+| `PUT` | `/api/v1/workflows/:id` | Update workflow |
+| `DELETE` | `/api/v1/workflows/:id` | Delete workflow (cascades runs) |
 | `POST` | `/api/v1/workflows/:id/trigger` | Trigger a run |
 | `GET` | `/api/v1/workflows/:id/runs` | List runs for a workflow |
 | `GET` | `/api/v1/runs/:id` | Get run status and output |
 | `GET` | `/api/v1/runs/:id/nodes` | Get per-node execution detail |
 
-**Not yet implemented:** `PUT /workflows/:id` (update), `DELETE /workflows/:id` (delete), `POST /runs/:id/cancel` (cancel).
+**Not yet implemented:** `POST /runs/:id/cancel` (cancel).
 
 ---
 
@@ -278,6 +323,8 @@ import {
   listWorkflows,       // GET /workflows
   getWorkflow,         // GET /workflows/:id
   createWorkflow,      // POST /workflows
+  updateWorkflow,      // PUT /workflows/:id
+  deleteWorkflow,      // DELETE /workflows/:id
   triggerWorkflow,     // POST /workflows/:id/trigger
   listWorkflowRuns,    // GET /workflows/:id/runs
   getWorkflowRun,      // GET /runs/:id

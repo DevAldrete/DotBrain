@@ -10,6 +10,18 @@ RETURNING *;
 SELECT * FROM workflows
 WHERE id = $1 LIMIT 1;
 
+-- name: UpdateWorkflow :one
+UPDATE workflows
+SET name        = $2,
+    description = $3,
+    definition  = $4,
+    updated_at  = NOW()
+WHERE id = $1
+RETURNING *;
+
+-- name: DeleteWorkflow :exec
+DELETE FROM workflows WHERE id = $1;
+
 -- name: ListWorkflows :many
 SELECT * FROM workflows
 ORDER BY created_at DESC

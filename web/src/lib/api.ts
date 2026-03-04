@@ -49,6 +49,25 @@ export async function createWorkflow(data: CreateWorkflowRequest): Promise<Workf
 	});
 }
 
+export async function updateWorkflow(id: string, data: CreateWorkflowRequest): Promise<Workflow> {
+	return request<Workflow>(`/workflows/${id}`, {
+		method: 'PUT',
+		body: JSON.stringify(data)
+	});
+}
+
+export async function deleteWorkflow(id: string): Promise<void> {
+	const res = await fetch(`${API_BASE}/workflows/${id}`, {
+		method: 'DELETE',
+		headers: { 'Content-Type': 'application/json' }
+	});
+
+	if (!res.ok) {
+		const body = await res.json().catch(() => ({ error: res.statusText }));
+		throw new ApiError(res.status, body.error || res.statusText);
+	}
+}
+
 // Workflow Runs
 export async function triggerWorkflow(
 	id: string,

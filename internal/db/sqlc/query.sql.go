@@ -125,6 +125,15 @@ func (q *Queries) CreateWorkflowRun(ctx context.Context, arg CreateWorkflowRunPa
 	return i, err
 }
 
+const deleteWorkflow = `-- name: DeleteWorkflow :exec
+DELETE FROM workflows WHERE id = $1
+`
+
+func (q *Queries) DeleteWorkflow(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, deleteWorkflow, id)
+	return err
+}
+
 const failRunsExceedingDuration = `-- name: FailRunsExceedingDuration :execrows
 UPDATE workflow_runs
 SET status = 'failed',
@@ -424,6 +433,42 @@ func (q *Queries) UpdateNodeExecutionStatus(ctx context.Context, arg UpdateNodeE
 		&i.StartedAt,
 		&i.CompletedAt,
 		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const updateWorkflow = `-- name: UpdateWorkflow :one
+UPDATE workflows
+SET name        = $2,
+    description = $3,
+    definition  = $4,
+    updated_at  = NOW()
+WHERE id = $1
+RETURNING id, name, description, definition, created_at, updated_at
+`
+
+type UpdateWorkflowParams struct {
+	ID          pgtype.UUID
+	Name        string
+	Description string
+	Definition  []byte
+}
+
+func (q *Queries) UpdateWorkflow(ctx context.Context, arg UpdateWorkflowParams) (Workflow, error) {
+	row := q.db.QueryRow(ctx, updateWorkflow,
+		arg.ID,
+		arg.Name,
+		arg.Description,
+		arg.Definition,
+	)
+	var i Workflow
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Description,
+		&i.Definition,
+		&i.CreatedAt,
+		&i.UpdatedAt,
 	)
 	return i, err
 }

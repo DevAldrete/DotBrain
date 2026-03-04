@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"time"
 
@@ -10,6 +11,7 @@ import (
 	"github.com/devaldrete/dotbrain/internal/db/sqlc"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -57,6 +59,8 @@ func (a *API) NewRouter() *gin.Engine {
 		v1.POST("/workflows", a.createWorkflowHandler)
 		v1.GET("/workflows", a.listWorkflowsHandler)
 		v1.GET("/workflows/:id", a.getWorkflowHandler)
+		v1.PUT("/workflows/:id", a.updateWorkflowHandler)
+		v1.DELETE("/workflows/:id", a.deleteWorkflowHandler)
 		v1.POST("/workflows/:id/trigger", a.workflowTriggerHandler)
 		v1.GET("/workflows/:id/runs", a.listWorkflowRunsHandler)
 
@@ -301,6 +305,74 @@ func (a *API) getWorkflowHandler(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, workflow)
+}
+
+func (a *API) updateWorkflowHandler(c *gin.Context) {
+	idStr := c.Param("id")
+	parsedID, err := uuid.Parse(idStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid workflow ID"})
+		return
+	}
+
+	var req CreateWorkflowRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	defBytes, err := json.Marshal(req.Definition)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid definition format"})
+		return
+	}
+
+	var pgID pgtype.UUID
+	pgID.Bytes = parsedID
+	pgID.Valid = true
+
+	workflow, err := a.queries.UpdateWorkflow(c, db.UpdateWorkflowParams{
+		ID:          pgID,
+		Name:        req.Name,
+		Description: req.Description,
+		Definition:  defBytes,
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			c.JSON(http.StatusNotFound, gin.H{"error": "workflow not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update workflow"})
+		return
+	}
+
+	c.JSON(http.StatusOK, workflow)
+}
+
+func (a *API) deleteWorkflowHandler(c *gin.Context) {
+	idStr := c.Param("id")
+	parsedID, err := uuid.Parse(idStr)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid workflow ID"})
+		return
+	}
+
+	var pgID pgtype.UUID
+	pgID.Bytes = parsedID
+	pgID.Valid = true
+
+	_, err = a.queries.GetWorkflow(c, pgID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "workflow not found"})
+		return
+	}
+
+	if err := a.queries.DeleteWorkflow(c, pgID); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to delete workflow"})
+		return
+	}
+
+	c.Status(http.StatusNoContent)
 }
 
 func (a *API) listWorkflowRunsHandler(c *gin.Context) {

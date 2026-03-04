@@ -200,7 +200,9 @@ type NodeExecution struct {
 | Query name | Operation | Used by |
 |---|---|---|
 | `CreateWorkflow` | INSERT | `createWorkflowHandler` |
-| `GetWorkflow` | SELECT by ID | `getWorkflowHandler`, `workflowTriggerHandler` |
+| `GetWorkflow` | SELECT by ID | `getWorkflowHandler`, `workflowTriggerHandler`, `deleteWorkflowHandler` |
+| `UpdateWorkflow` | UPDATE name/description/definition, RETURNING * | `updateWorkflowHandler` |
+| `DeleteWorkflow` | DELETE by ID | `deleteWorkflowHandler` |
 | `ListWorkflows` | SELECT all (paginated) | `listWorkflowsHandler` |
 | `CreateWorkflowRun` | INSERT | `workflowTriggerHandler` |
 | `GetWorkflowRun` | SELECT by ID | `getRunHandler` |

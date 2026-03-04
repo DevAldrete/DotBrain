@@ -95,6 +95,139 @@ func TestWorkflowTriggerHandler_Success(t *testing.T) {
 	t.Skip("skipping db dependent test")
 }
 
+// --- Workflow CRUD Tests ---
+
+// TestUpdateWorkflow_Success verifies that PUT /api/v1/workflows/:id updates
+// a workflow's name, description, and definition, returning the updated object.
+func TestUpdateWorkflow_Success(t *testing.T) {
+	recorder := &queryRecorder{
+		workflowDef: []byte(`{"nodes":[{"id":"1","type":"echo"}]}`),
+	}
+	queries := db.New(recorder)
+	api := &API{queries: queries}
+	router := api.NewRouter()
+
+	body := strings.NewReader(`{
+		"name": "Updated Pipeline",
+		"description": "Updated desc",
+		"definition": {"nodes":[{"id":"2","type":"log"}]}
+	}`)
+	req, _ := http.NewRequest("PUT", "/api/v1/workflows/01961234-5678-7000-8000-000000000001", body)
+	req.Header.Set("Content-Type", "application/json")
+
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// Verify UpdateWorkflow SQL was called with the correct args
+	call := recorder.findCall("UPDATE workflows")
+	if call == nil {
+		t.Fatal("expected UpdateWorkflow query to be called")
+	}
+
+	// args: id, name, description, definition
+	name, ok := call.args[1].(string)
+	if !ok {
+		t.Fatalf("expected name arg to be string, got %T", call.args[1])
+	}
+	if name != "Updated Pipeline" {
+		t.Errorf("expected name 'Updated Pipeline', got %q", name)
+	}
+
+	desc, ok := call.args[2].(string)
+	if !ok {
+		t.Fatalf("expected description arg to be string, got %T", call.args[2])
+	}
+	if desc != "Updated desc" {
+		t.Errorf("expected description 'Updated desc', got %q", desc)
+	}
+}
+
+// TestUpdateWorkflow_NotFound verifies that PUT on a non-existent ID returns 404.
+func TestUpdateWorkflow_NotFound(t *testing.T) {
+	recorder := &queryRecorder{
+		errQueries: []string{"UPDATE workflows"},
+	}
+	queries := db.New(recorder)
+	api := &API{queries: queries}
+	router := api.NewRouter()
+
+	body := strings.NewReader(`{
+		"name": "Updated",
+		"description": "Desc",
+		"definition": {"nodes":[]}
+	}`)
+	req, _ := http.NewRequest("PUT", "/api/v1/workflows/01961234-5678-7000-8000-000000000099", body)
+	req.Header.Set("Content-Type", "application/json")
+
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+// TestDeleteWorkflow_Success verifies that DELETE /api/v1/workflows/:id removes
+// the workflow and returns 204.
+func TestDeleteWorkflow_Success(t *testing.T) {
+	recorder := &queryRecorder{
+		workflowDef: []byte(`{"nodes":[]}`),
+	}
+	queries := db.New(recorder)
+	api := &API{queries: queries}
+	router := api.NewRouter()
+
+	req, _ := http.NewRequest("DELETE", "/api/v1/workflows/01961234-5678-7000-8000-000000000001", nil)
+
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("expected 204, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// Verify GetWorkflow was called (existence check)
+	getCall := recorder.findCall("FROM workflows")
+	if getCall == nil {
+		t.Fatal("expected GetWorkflow to be called for existence check")
+	}
+
+	// Verify DeleteWorkflow was called
+	deleteCall := recorder.findCall("DELETE FROM workflows")
+	if deleteCall == nil {
+		t.Fatal("expected DeleteWorkflow query to be called")
+	}
+}
+
+// TestDeleteWorkflow_NotFound verifies that DELETE on a non-existent ID returns 404.
+func TestDeleteWorkflow_NotFound(t *testing.T) {
+	recorder := &queryRecorder{
+		errQueries: []string{"FROM workflows"},
+	}
+	queries := db.New(recorder)
+	api := &API{queries: queries}
+	router := api.NewRouter()
+
+	req, _ := http.NewRequest("DELETE", "/api/v1/workflows/01961234-5678-7000-8000-000000000099", nil)
+
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// Verify no DELETE was attempted
+	deleteCall := recorder.findCall("DELETE FROM workflows")
+	if deleteCall != nil {
+		t.Error("DeleteWorkflow should not be called when workflow doesn't exist")
+	}
+}
+
 // --- Run Endpoints Tests ---
 
 // TestListWorkflowRuns_InvalidID verifies a bad workflow ID returns 400.
@@ -253,7 +386,8 @@ func TestTriggerHandler_CreatesRunAsPending(t *testing.T) {
 type queryRecorder struct {
 	mu          sync.Mutex
 	calls       []queryCall
-	workflowDef []byte // returned by GetWorkflow
+	workflowDef []byte   // returned by GetWorkflow
+	errQueries  []string // substrings; QueryRow matching these returns errRow (pgx.ErrNoRows)
 }
 
 type queryCall struct {
@@ -279,6 +413,13 @@ func (r *queryRecorder) QueryRow(ctx context.Context, query string, args ...any)
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.calls = append(r.calls, queryCall{query: query, args: args})
+
+	// If this query matches an error pattern, return a row that errors on Scan
+	for _, pattern := range r.errQueries {
+		if strings.Contains(query, pattern) {
+			return &errRow{err: pgx.ErrNoRows}
+		}
+	}
 
 	// If this is a GetWorkflow query, return a row that scans into a Workflow
 	if strings.Contains(query, "FROM workflows") && r.workflowDef != nil {
@@ -356,3 +497,12 @@ func (r *emptyRows) Scan(dest ...any) error                       { return nil }
 func (r *emptyRows) Values() ([]any, error)                       { return nil, nil }
 func (r *emptyRows) RawValues() [][]byte                          { return nil }
 func (r *emptyRows) Conn() *pgx.Conn                              { return nil }
+
+// errRow implements pgx.Row, returning an error from Scan (e.g., pgx.ErrNoRows).
+type errRow struct {
+	err error
+}
+
+func (r *errRow) Scan(dest ...any) error {
+	return r.err
+}
