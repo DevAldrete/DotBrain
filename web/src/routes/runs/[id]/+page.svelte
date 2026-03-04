@@ -3,7 +3,7 @@
 	import { page } from '$app/state';
 	import { getWorkflowRun, listNodeExecutions } from '$lib/api';
 	import type { WorkflowRun, NodeExecution } from '$lib/types';
-	import { timeAgo, duration, prettyJson, formatDate } from '$lib/utils';
+	import { timeAgo, duration, prettyData, formatDate } from '$lib/utils';
 	import { getNodeMeta } from '$lib/nodes';
 	import StatusBadge from '$lib/components/StatusBadge.svelte';
 
@@ -234,14 +234,14 @@
 											<!-- Input -->
 											<div>
 												<div class="text-[10px] font-mono text-muted uppercase tracking-wider mb-2">Input</div>
-												<pre class="bg-surface-dim border border-border-subtle rounded-sm p-3 text-xs font-mono text-white/60 overflow-x-auto max-h-48 overflow-y-auto">{prettyJson(node.InputData)}</pre>
+												<pre class="bg-surface-dim border border-border-subtle rounded-sm p-3 text-xs font-mono text-white/60 overflow-x-auto max-h-48 overflow-y-auto">{prettyData(node.InputData)}</pre>
 											</div>
 
 											<!-- Output -->
 											{#if node.OutputData}
 												<div>
 													<div class="text-[10px] font-mono text-muted uppercase tracking-wider mb-2">Output</div>
-													<pre class="bg-surface-dim border border-border-subtle rounded-sm p-3 text-xs font-mono text-white/60 overflow-x-auto max-h-48 overflow-y-auto">{prettyJson(node.OutputData)}</pre>
+													<pre class="bg-surface-dim border border-border-subtle rounded-sm p-3 text-xs font-mono text-white/60 overflow-x-auto max-h-48 overflow-y-auto">{prettyData(node.OutputData)}</pre>
 												</div>
 											{/if}
 
@@ -274,13 +274,13 @@
 				<summary class="text-xs font-mono text-muted uppercase tracking-widest cursor-pointer hover:text-white/60 transition-colors select-none mb-3">
 					Run Input
 				</summary>
-				<pre class="bg-surface-dim border border-border rounded-sm p-4 text-xs font-mono text-white/60 overflow-x-auto max-h-64 overflow-y-auto">{prettyJson(run.InputData)}</pre>
+				<pre class="bg-surface-dim border border-border rounded-sm p-4 text-xs font-mono text-white/60 overflow-x-auto max-h-64 overflow-y-auto">{prettyData(run.InputData)}</pre>
 			</details>
 			<details>
 				<summary class="text-xs font-mono text-muted uppercase tracking-widest cursor-pointer hover:text-white/60 transition-colors select-none mb-3">
 					Run Output
 				</summary>
-				<pre class="bg-surface-dim border border-border rounded-sm p-4 text-xs font-mono text-white/60 overflow-x-auto max-h-64 overflow-y-auto">{prettyJson(run.OutputData)}</pre>
+				<pre class="bg-surface-dim border border-border rounded-sm p-4 text-xs font-mono text-white/60 overflow-x-auto max-h-64 overflow-y-auto">{prettyData(run.OutputData)}</pre>
 			</details>
 		</div>
 	{/if}

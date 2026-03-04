@@ -1,13 +1,19 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { listWorkflows } from '$lib/api';
+	import { goto } from '$app/navigation';
+	import { listWorkflows, deleteWorkflow } from '$lib/api';
 	import type { Workflow } from '$lib/types';
-	import { timeAgo } from '$lib/utils';
+	import { timeAgo, decodeData } from '$lib/utils';
 	import StatusBadge from '$lib/components/StatusBadge.svelte';
 
 	let workflows = $state<Workflow[]>([]);
 	let loading = $state(true);
 	let error = $state<string | null>(null);
+
+	// Delete confirmation
+	let deleteTarget = $state<Workflow | null>(null);
+	let deleting = $state(false);
+	let deleteError = $state<string | null>(null);
 
 	onMount(async () => {
 		try {
@@ -19,11 +25,31 @@
 		}
 	});
 
+	function openDelete(e: MouseEvent, workflow: Workflow) {
+		e.preventDefault();
+		e.stopPropagation();
+		deleteTarget = workflow;
+		deleteError = null;
+	}
+
+	async function handleDelete() {
+		if (!deleteTarget) return;
+		deleting = true;
+		deleteError = null;
+		try {
+			await deleteWorkflow(deleteTarget.ID);
+			workflows = workflows.filter(w => w.ID !== deleteTarget!.ID);
+			deleteTarget = null;
+		} catch (e) {
+			deleteError = e instanceof Error ? e.message : 'Failed to delete workflow';
+		} finally {
+			deleting = false;
+		}
+	}
+
 	function nodeCount(workflow: Workflow): number {
 		try {
-			const def = typeof workflow.Definition === 'string'
-				? JSON.parse(workflow.Definition)
-				: workflow.Definition;
+			const def = decodeData(workflow.Definition) as { nodes?: unknown[] } | null;
 			return def?.nodes?.length ?? 0;
 		} catch {
 			return 0;
@@ -32,10 +58,8 @@
 
 	function nodeTypes(workflow: Workflow): string[] {
 		try {
-			const def = typeof workflow.Definition === 'string'
-				? JSON.parse(workflow.Definition)
-				: workflow.Definition;
-			return [...new Set((def?.nodes ?? []).map((n: { type: string }) => n.type))] as string[];
+			const def = decodeData(workflow.Definition) as { nodes?: { type: string }[] } | null;
+			return [...new Set((def?.nodes ?? []).map((n) => n.type))] as string[];
 		} catch {
 			return [];
 		}
@@ -135,8 +159,30 @@
 								{/each}
 							</div>
 						</div>
-						<div class="flex-shrink-0 flex items-center gap-4 ml-4">
-							<span class="text-xs font-mono text-muted">{timeAgo(workflow.CreatedAt)}</span>
+						<div class="flex-shrink-0 flex items-center gap-2 ml-4">
+							<span class="text-xs font-mono text-muted mr-2">{timeAgo(workflow.CreatedAt)}</span>
+							<!-- Edit -->
+							<button
+								onclick={(e) => { e.preventDefault(); e.stopPropagation(); goto(`/workflows/${workflow.ID}?edit=1`); }}
+								class="opacity-0 group-hover:opacity-100 p-2 text-muted hover:text-brand border border-transparent hover:border-brand/30 rounded-sm transition-all duration-150"
+								title="Edit workflow"
+								aria-label="Edit {workflow.Name}"
+							>
+								<svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+									<path stroke-linecap="round" stroke-linejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931zm0 0L19.5 7.125" />
+								</svg>
+							</button>
+							<!-- Delete -->
+							<button
+								onclick={(e) => openDelete(e, workflow)}
+								class="opacity-0 group-hover:opacity-100 p-2 text-muted hover:text-red-400 border border-transparent hover:border-red-500/30 rounded-sm transition-all duration-150"
+								title="Delete workflow"
+								aria-label="Delete {workflow.Name}"
+							>
+								<svg class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+									<path stroke-linecap="round" stroke-linejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
+								</svg>
+							</button>
 							<svg class="w-4 h-4 text-muted group-hover:text-brand transition-colors group-hover:translate-x-0.5 duration-200" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
 								<path stroke-linecap="round" stroke-linejoin="round" d="M8.25 4.5l7.5 7.5-7.5 7.5" />
 							</svg>
@@ -147,3 +193,59 @@
 		</div>
 	{/if}
 </div>
+
+<!-- Delete confirmation modal -->
+{#if deleteTarget}
+	<div
+		class="fixed inset-0 bg-black/70 z-40"
+		role="presentation"
+		onclick={() => { if (!deleting) deleteTarget = null; }}
+	></div>
+	<div class="fixed inset-0 z-50 flex items-center justify-center p-4">
+		<div class="bg-[#121212] border border-border rounded-sm w-full max-w-md slide-up" role="dialog" aria-modal="true" aria-labelledby="list-delete-title">
+			<div class="px-6 py-5 border-b border-border flex items-center gap-3">
+				<div class="w-8 h-8 flex items-center justify-center border border-red-500/30 bg-red-500/5 rounded-sm">
+					<svg class="w-4 h-4 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+						<path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z" />
+					</svg>
+				</div>
+				<h2 id="list-delete-title" class="font-sans font-bold text-white text-sm uppercase tracking-wider">Delete Workflow</h2>
+			</div>
+			<div class="px-6 py-5">
+				<p class="text-sm font-mono text-white/60">
+					This will permanently delete <span class="text-white font-bold">{deleteTarget.Name}</span> and all associated run history.
+				</p>
+				<p class="text-xs font-mono text-muted mt-2">This action cannot be undone.</p>
+				{#if deleteError}
+					<div class="mt-4 text-xs font-mono text-red-400 bg-red-500/5 border border-red-500/20 rounded-sm p-3">{deleteError}</div>
+				{/if}
+			</div>
+			<div class="px-6 pb-5 flex items-center justify-end gap-3">
+				<button
+					onclick={() => { deleteTarget = null; }}
+					disabled={deleting}
+					class="px-4 py-2.5 text-xs font-mono uppercase tracking-wider text-muted hover:text-white transition-colors disabled:opacity-50"
+				>
+					Cancel
+				</button>
+				<button
+					onclick={handleDelete}
+					disabled={deleting}
+					class="px-5 py-2.5 bg-red-500 text-white font-bold text-xs uppercase tracking-wider hover:bg-red-400 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
+				>
+					{#if deleting}
+						<span class="flex items-center gap-2">
+							<svg class="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
+								<circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+								<path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+							</svg>
+							Deleting...
+						</span>
+					{:else}
+						Delete Workflow
+					{/if}
+				</button>
+			</div>
+		</div>
+	</div>
+{/if}
