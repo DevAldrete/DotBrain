@@ -75,7 +75,15 @@ func main() {
 	go a.RunWatchdog(watchdogCtx, maxDuration, watchdogInterval)
 	logger.Info("watchdog started", "maxDuration", maxDuration, "interval", watchdogInterval)
 
-	router := a.NewRouter()
+	// 3d. Auth: read API key from environment
+	apiKey := os.Getenv("API_KEY")
+	if apiKey == "" {
+		logger.Warn("API_KEY not set — authentication is DISABLED (safe for local dev only)")
+	} else {
+		logger.Info("API_KEY configured — authentication is ENABLED")
+	}
+
+	router := a.NewRouter(apiKey)
 
 	// 4. Configure HTTP Server
 	srv := &http.Server{

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/devaldrete/dotbrain/internal/api/middleware"
 	"github.com/devaldrete/dotbrain/internal/core"
 	"github.com/devaldrete/dotbrain/internal/db/sqlc"
 	"github.com/devaldrete/dotbrain/internal/scheduler"
@@ -45,7 +46,10 @@ func (a *API) SetScheduler(s *scheduler.Scheduler) {
 
 // NewRouter initializes and returns a configured *gin.Engine router.
 // It sets up global middleware and registers application routes.
-func (a *API) NewRouter() *gin.Engine {
+// When apiKey is non-empty, all /api/v1 routes (except /health and /readiness)
+// require an Authorization: Bearer <apiKey> header. When apiKey is empty,
+// auth is disabled (suitable for local development).
+func (a *API) NewRouter(apiKey string) *gin.Engine {
 	// Use gin.New() instead of Default() to explicitly control middleware
 	r := gin.New()
 
@@ -54,38 +58,41 @@ func (a *API) NewRouter() *gin.Engine {
 	// In production, we'd replace this with a structured logger (slog/zap)
 	r.Use(gin.Logger())
 
-	// API Versioning Group
+	// Unauthenticated infrastructure endpoints — must be reachable by
+	// Kubernetes probes and health checks without credentials.
+	r.GET("/api/v1/health", a.healthCheckHandler)
+	r.GET("/api/v1/readiness", a.readinessHandler)
+
+	// API Versioning Group — all routes here require auth when key is set
 	v1 := r.Group("/api/v1")
-	{
-		// Health & Readiness Endpoints (Critical for Kubernetes)
-		v1.GET("/health", a.healthCheckHandler)
-		v1.GET("/readiness", a.readinessHandler)
-
-		// Temporary ping endpoint (can be removed later)
-		v1.GET("/ping", func(c *gin.Context) {
-			c.JSON(http.StatusOK, gin.H{"message": "pong"})
-		})
-
-		// Workflow Endpoints
-		v1.POST("/workflows", a.createWorkflowHandler)
-		v1.GET("/workflows", a.listWorkflowsHandler)
-		v1.GET("/workflows/:id", a.getWorkflowHandler)
-		v1.PUT("/workflows/:id", a.updateWorkflowHandler)
-		v1.DELETE("/workflows/:id", a.deleteWorkflowHandler)
-		v1.POST("/workflows/:id/trigger", a.workflowTriggerHandler)
-		v1.GET("/workflows/:id/runs", a.listWorkflowRunsHandler)
-
-		// Run Endpoints
-		v1.GET("/runs/:id", a.getRunHandler)
-		v1.GET("/runs/:id/nodes", a.listNodeExecutionsHandler)
-		v1.POST("/runs/:id/cancel", a.cancelRunHandler)
-
-		// Schedule Endpoints
-		v1.POST("/workflows/:id/schedules", a.createScheduleHandler)
-		v1.GET("/workflows/:id/schedules", a.listSchedulesHandler)
-		v1.DELETE("/schedules/:id", a.deleteScheduleHandler)
-		v1.PATCH("/schedules/:id", a.updateScheduleHandler)
+	if apiKey != "" {
+		v1.Use(middleware.APIKeyAuth(apiKey))
 	}
+
+	// Temporary ping endpoint (can be removed later)
+	v1.GET("/ping", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"message": "pong"})
+	})
+
+	// Workflow Endpoints
+	v1.POST("/workflows", a.createWorkflowHandler)
+	v1.GET("/workflows", a.listWorkflowsHandler)
+	v1.GET("/workflows/:id", a.getWorkflowHandler)
+	v1.PUT("/workflows/:id", a.updateWorkflowHandler)
+	v1.DELETE("/workflows/:id", a.deleteWorkflowHandler)
+	v1.POST("/workflows/:id/trigger", a.workflowTriggerHandler)
+	v1.GET("/workflows/:id/runs", a.listWorkflowRunsHandler)
+
+	// Run Endpoints
+	v1.GET("/runs/:id", a.getRunHandler)
+	v1.GET("/runs/:id/nodes", a.listNodeExecutionsHandler)
+	v1.POST("/runs/:id/cancel", a.cancelRunHandler)
+
+	// Schedule Endpoints
+	v1.POST("/workflows/:id/schedules", a.createScheduleHandler)
+	v1.GET("/workflows/:id/schedules", a.listSchedulesHandler)
+	v1.DELETE("/schedules/:id", a.deleteScheduleHandler)
+	v1.PATCH("/schedules/:id", a.updateScheduleHandler)
 
 	return r
 }

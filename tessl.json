@@ -1,0 +1,14 @@
+{
+  "name": "project",
+  "dependencies": {
+    "tessl/golang-github-com--google--uuid": {
+      "version": "1.6.1"
+    },
+    "tessl/golang-github-com-jackc-pgx-v5": {
+      "version": "5.8.0"
+    },
+    "pantheon-ai/test-driven-development": {
+      "version": "0.2.4"
+    }
+  }
+}

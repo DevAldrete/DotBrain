@@ -4,7 +4,25 @@
 
 All endpoints are under the `/api/v1` prefix. The server uses Gin with `Recovery` and `Logger` middleware applied globally.
 
-There is no authentication. All endpoints are publicly accessible.
+## Authentication
+
+All `/api/v1` routes **except `/health` and `/readiness`** require an `Authorization` header with a valid API key:
+
+```
+Authorization: Bearer <your-api-key>
+```
+
+The API key is configured via the `API_KEY` environment variable on the server. When `API_KEY` is empty (local development), authentication is disabled and all routes are accessible without a header. A startup log line indicates whether auth is enabled or disabled.
+
+Requests missing the header, using a malformed header, or supplying an incorrect key receive **401 Unauthorized**:
+
+```json
+{ "error": "missing Authorization header" }
+{ "error": "Authorization header must be in the format: Bearer <token>" }
+{ "error": "invalid API key" }
+```
+
+The frontend (`web/src/lib/api.ts`) reads the key from `VITE_API_KEY` at build time and includes it in every request automatically.
 
 ---
 
@@ -307,8 +325,11 @@ All error responses use the same envelope:
 | `GET` | `/api/v1/workflows/:id/runs` | List runs for a workflow |
 | `GET` | `/api/v1/runs/:id` | Get run status and output |
 | `GET` | `/api/v1/runs/:id/nodes` | Get per-node execution detail |
-
-**Not yet implemented:** `POST /runs/:id/cancel` (cancel).
+| `POST` | `/api/v1/runs/:id/cancel` | Cancel an in-progress run |
+| `POST` | `/api/v1/workflows/:id/schedules` | Create a cron schedule |
+| `GET` | `/api/v1/workflows/:id/schedules` | List schedules for a workflow |
+| `DELETE` | `/api/v1/schedules/:id` | Delete a schedule |
+| `PATCH` | `/api/v1/schedules/:id` | Update a schedule |
 
 ---
 
@@ -329,8 +350,13 @@ import {
   listWorkflowRuns,    // GET /workflows/:id/runs
   getWorkflowRun,      // GET /runs/:id
   listNodeExecutions,  // GET /runs/:id/nodes
+  cancelRun,           // POST /runs/:id/cancel
+  createSchedule,      // POST /workflows/:id/schedules
+  listSchedules,       // GET /workflows/:id/schedules
+  deleteSchedule,      // DELETE /schedules/:id
+  updateSchedule,      // PATCH /schedules/:id
   ApiError
 } from '$lib/api';
 ```
 
-The base URL is `/api/v1`, which is proxied to the Go server via the Vite dev server config.
+The base URL is `/api/v1`, proxied to the Go server via the Vite dev server config. The `VITE_API_KEY` env var is included automatically in every request header.

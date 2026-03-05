@@ -1,30 +1,24 @@
 # DotBrain — Development Roadmap
 
-## Current State (as of Phase 4)
+## Current State (as of Phase 8)
 
-The backend MVP is complete and the frontend dashboard exists. The project can:
+The backend and frontend are feature-complete through Phase 8. The project can:
 
-- Create and store workflow definitions (POST /api/v1/workflows)
-- List and retrieve workflow definitions (GET)
-- Trigger a workflow run, which executes nodes in-process via a goroutine (POST /api/v1/workflows/:id/trigger)
-- Return a `run_id` to the caller (HTTP 202 Accepted)
-- Pass `NodeConfig.Params` to node instances at runtime (param injection)
-- Record per-node execution detail (`node_executions` rows written via `DBNodeHook`)
-- Correctly model run lifecycle: `pending → running → completed/failed`
-- Expose run status and node details via 3 API endpoints
-- Execute real outbound HTTP requests via `HttpNode`
+- Create, update, and delete workflow definitions (full CRUD)
+- Execute workflows as a DAG with branching, parallel nodes, and conditional edges
+- Retry failed nodes with exponential backoff
+- Survive server restarts without leaving runs stuck as `running` (crash recovery)
+- Cancel in-progress runs
+- Schedule workflows via cron expressions
+- Authenticate all `/api/v1` API calls via `Authorization: Bearer <key>` header (`/health` and `/readiness` remain public)
+- Execute real HTTP requests via `HttpNode`
 - Execute real OpenAI Chat Completions API calls via `LLMNode`
-- Mark runs as `completed` or `failed` in the database with accurate `started_at` and `completed_at` timestamps
+- Record per-node execution detail (`node_executions`) and expose via API
+- Model run lifecycle correctly: `pending → running → completed/failed/cancelled`
 
 The project **cannot** yet:
 
-- Execute workflows as a DAG (branching, parallel nodes, conditional edges)
-- Retry failed nodes automatically
-- Survive a server restart without leaving runs stuck as `running`
-- Cancel an in-progress run
-- Authenticate any API caller
-- Schedule workflows via cron
-- Stream run progress in real time (UI requires a manual refresh)
+- Stream run progress in real time (UI polls at 1500ms — SSE not implemented)
 - Use LLM providers other than OpenAI
 
 ---
@@ -81,9 +75,9 @@ These tasks harden and extend the core execution engine. TASK-09 (DAG) and TASK-
 
 | Task | Description | Priority | Status |
 |------|-------------|----------|--------|
-| [TASK-09](tasks/TASK-09-dag-edges.md) | DAG edges and branching engine | Critical | Pending |
-| [TASK-10](tasks/TASK-10-retry-backoff.md) | Retry policy with exponential backoff | Critical | Pending |
-| [TASK-11](tasks/TASK-11-crash-recovery.md) | Crash recovery for stale running runs | Critical | Pending |
+| [TASK-09](tasks/TASK-09-dag-edges.md) | DAG edges and branching engine | Critical | **Done** |
+| [TASK-10](tasks/TASK-10-retry-backoff.md) | Retry policy with exponential backoff | Critical | **Done** |
+| [TASK-11](tasks/TASK-11-crash-recovery.md) | Crash recovery for stale running runs | Critical | **Done** |
 
 **Order dependency:** TASK-10 requires TASK-09. TASK-11 is independent.
 
@@ -95,8 +89,8 @@ These tasks fill gaps in the HTTP API. Both are self-contained and can be done i
 
 | Task | Description | Priority | Status |
 |------|-------------|----------|--------|
-| [TASK-12](tasks/TASK-12-workflow-crud.md) | Workflow update (`PUT`) and delete (`DELETE`) endpoints | High | Pending |
-| [TASK-13](tasks/TASK-13-run-cancellation.md) | Run cancellation (`POST /runs/:id/cancel`) | High | Pending |
+| [TASK-12](tasks/TASK-12-workflow-crud.md) | Workflow update (`PUT`) and delete (`DELETE`) endpoints | High | **Done** |
+| [TASK-13](tasks/TASK-13-run-cancellation.md) | Run cancellation (`POST /runs/:id/cancel`) | High | **Done** |
 
 ---
 
@@ -106,7 +100,7 @@ Scheduled execution via cron expressions. Depends on crash recovery (TASK-11) be
 
 | Task | Description | Priority | Status |
 |------|-------------|----------|--------|
-| [TASK-14](tasks/TASK-14-cron-triggers.md) | Cron / scheduled triggers | High | Pending |
+| [TASK-14](tasks/TASK-14-cron-triggers.md) | Cron / scheduled triggers | High | **Done** |
 
 **Order dependency:** TASK-11 should be completed first.
 
@@ -118,7 +112,7 @@ Authentication middleware. Self-contained and can be done at any point, but must
 
 | Task | Description | Priority | Status |
 |------|-------------|----------|--------|
-| [TASK-15](tasks/TASK-15-auth.md) | API key authentication middleware | High | Pending |
+| [TASK-15](tasks/TASK-15-auth.md) | API key authentication middleware | High | **Done** |
 
 ---
 
@@ -144,8 +138,6 @@ Real-time run progress via Server-Sent Events. Additive — the polling UI conti
 
 ## What Is Explicitly Out of Scope (For Now)
 
-These are valid future directions but are not part of the current plan:
-
 - **Redis / external queue**: The goroutine approach is sufficient while the system runs as a single process. Redis becomes relevant when horizontal scaling or cross-restart durability is needed.
 - **Visual drag-and-drop builder**: A proper node graph editor (e.g., using Svelte Flow) is a significant standalone effort. The JSON editor in the create workflow form is sufficient for now.
 - **Database migration framework**: The `schema.sql` approach is workable while the schema is still changing. Consider `goose` or `golang-migrate` once the schema stabilizes.
@@ -153,29 +145,11 @@ These are valid future directions but are not part of the current plan:
 
 ---
 
-## Suggested Task Execution Order
+## Remaining Work
+
+Only two tasks are outstanding:
 
 ```
-TASK-01  (param injection)
-   ├──> TASK-02  (node execution audit trail)
-   │       └──> TASK-04 must be done first (run lifecycle fix)
-   ├──> TASK-05  (HttpNode)
-   └──> TASK-06  (LLMNode + OpenAI)
-
-TASK-03  (run API endpoints) — can start in parallel with TASK-01
-   └──> TASK-07  (frontend API client)
-           └──> TASK-08  (frontend dashboard)
-
---- Phase 5+ ---
-
-TASK-09  (DAG edges)          TASK-11  (crash recovery)
-   └──> TASK-10  (retry)             └──> TASK-14  (cron triggers)
-
-TASK-12  (workflow CRUD)      — independent, any time
-TASK-13  (run cancellation)   — independent, any time
-TASK-15  (auth)               — independent, any time
 TASK-16  (multi-provider LLM) — independent, any time
-TASK-17  (SSE streaming)      — independent, any time
+TASK-17  (SSE streaming)       — independent, any time
 ```
-
-The critical path for Phase 5 is: **TASK-09 → TASK-10**, with **TASK-11 → TASK-14** as a parallel track.

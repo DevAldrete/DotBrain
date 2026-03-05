@@ -13,6 +13,10 @@ import type {
 
 const API_BASE = '/api/v1';
 
+// API key injected at build/deploy time via VITE_API_KEY env var.
+// When not set (local dev without auth), requests are sent without the header.
+const API_KEY = import.meta.env.VITE_API_KEY ?? '';
+
 class ApiError extends Error {
 	constructor(
 		public status: number,
@@ -25,7 +29,11 @@ class ApiError extends Error {
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
 	const res = await fetch(`${API_BASE}${path}`, {
-		headers: { 'Content-Type': 'application/json', ...options?.headers },
+		headers: {
+			'Content-Type': 'application/json',
+			...(API_KEY ? { Authorization: `Bearer ${API_KEY}` } : {}),
+			...options?.headers
+		},
 		...options
 	});
 
@@ -63,7 +71,10 @@ export async function updateWorkflow(id: string, data: CreateWorkflowRequest): P
 export async function deleteWorkflow(id: string): Promise<void> {
 	const res = await fetch(`${API_BASE}/workflows/${id}`, {
 		method: 'DELETE',
-		headers: { 'Content-Type': 'application/json' }
+		headers: {
+			'Content-Type': 'application/json',
+			...(API_KEY ? { Authorization: `Bearer ${API_KEY}` } : {})
+		}
 	});
 
 	if (!res.ok) {
@@ -121,7 +132,10 @@ export async function listSchedules(workflowId: string): Promise<Schedule[]> {
 export async function deleteSchedule(scheduleId: string): Promise<void> {
 	const res = await fetch(`${API_BASE}/schedules/${scheduleId}`, {
 		method: 'DELETE',
-		headers: { 'Content-Type': 'application/json' }
+		headers: {
+			'Content-Type': 'application/json',
+			...(API_KEY ? { Authorization: `Bearer ${API_KEY}` } : {})
+		}
 	});
 
 	if (!res.ok) {
