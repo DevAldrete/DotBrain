@@ -11,6 +11,7 @@ import (
 	"time"
 
 	db "github.com/devaldrete/dotbrain/internal/db/sqlc"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -388,6 +389,8 @@ type queryRecorder struct {
 	calls       []queryCall
 	workflowDef []byte   // returned by GetWorkflow
 	errQueries  []string // substrings; QueryRow matching these returns errRow (pgx.ErrNoRows)
+	runStatus   string   // if set, returned by GetWorkflowRun queries
+	runIDStr    string   // run UUID string for GetWorkflowRun matching
 }
 
 type queryCall struct {
@@ -424,6 +427,11 @@ func (r *queryRecorder) QueryRow(ctx context.Context, query string, args ...any)
 	// If this is a GetWorkflow query, return a row that scans into a Workflow
 	if strings.Contains(query, "FROM workflows") && r.workflowDef != nil {
 		return &workflowRow{def: r.workflowDef}
+	}
+
+	// If this is a GetWorkflowRun query and a fake run status is configured
+	if strings.Contains(query, "FROM workflow_runs") && r.runStatus != "" {
+		return &workflowRunRow{status: r.runStatus, runIDStr: r.runIDStr}
 	}
 
 	return &mockRow{}
@@ -505,4 +513,33 @@ type errRow struct {
 
 func (r *errRow) Scan(dest ...any) error {
 	return r.err
+}
+
+// workflowRunRow implements pgx.Row for GetWorkflowRun queries.
+// It scans a fake run with a configurable status.
+type workflowRunRow struct {
+	status   string
+	runIDStr string
+}
+
+func (r *workflowRunRow) Scan(dest ...any) error {
+	// GetWorkflowRun scans: id, workflow_id, status, input_data, output_data,
+	// error, started_at, completed_at, created_at  (9 fields)
+	if len(dest) >= 3 {
+		if id, ok := dest[0].(*pgtype.UUID); ok {
+			if r.runIDStr != "" {
+				parsed, _ := uuid.Parse(r.runIDStr)
+				id.Bytes = parsed
+				id.Valid = true
+			}
+		}
+		if wfID, ok := dest[1].(*pgtype.UUID); ok {
+			wfID.Bytes = [16]byte{0x99}
+			wfID.Valid = true
+		}
+		if s, ok := dest[2].(*string); ok {
+			*s = r.status
+		}
+	}
+	return nil
 }

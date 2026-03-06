@@ -33,6 +33,7 @@ The frontend (`web/src/lib/api.ts`) reads the key from `VITE_API_KEY` at build t
 Liveness probe. Returns 200 if the process is running. Kubernetes uses this to determine whether to restart a pod.
 
 **Response 200:**
+
 ```json
 {
   "status": "UP",
@@ -47,6 +48,7 @@ Liveness probe. Returns 200 if the process is running. Kubernetes uses this to d
 Readiness probe. Pings the database connection pool. Returns 503 if the DB is unreachable, signaling Kubernetes not to route traffic to this pod.
 
 **Response 200:**
+
 ```json
 {
   "status": "READY",
@@ -55,6 +57,7 @@ Readiness probe. Pings the database connection pool. Returns 503 if the DB is un
 ```
 
 **Response 503:**
+
 ```json
 {
   "status": "NOT_READY",
@@ -72,25 +75,25 @@ Readiness probe. Pings the database connection pool. Returns 503 if the DB is un
 Creates a new workflow definition and persists it to the database.
 
 **Request body:**
+
 ```json
 {
   "name": "My Pipeline",
   "description": "Optional description",
   "definition": {
-    "nodes": [
-      { "id": "step-1", "type": "echo" }
-    ]
+    "nodes": [{ "id": "step-1", "type": "echo" }]
   }
 }
 ```
 
-| Field | Type | Required | Notes |
-|---|---|---|---|
-| `name` | string | yes | |
-| `description` | string | no | Defaults to `""` |
-| `definition` | object | yes | Must be a valid `WorkflowDefinition` shape. Node types are **not** validated at creation time. |
+| Field         | Type   | Required | Notes                                                                                          |
+| ------------- | ------ | -------- | ---------------------------------------------------------------------------------------------- |
+| `name`        | string | yes      |                                                                                                |
+| `description` | string | no       | Defaults to `""`                                                                               |
+| `definition`  | object | yes      | Must be a valid `WorkflowDefinition` shape. Node types are **not** validated at creation time. |
 
 **Response 201** — the created workflow row:
+
 ```json
 {
   "ID": "019547a2-...",
@@ -114,6 +117,7 @@ Creates a new workflow definition and persists it to the database.
 Lists all workflows, ordered by `created_at DESC`. Returns up to 100 results (hardcoded; no pagination parameters).
 
 **Response 200:**
+
 ```json
 [
   {
@@ -150,14 +154,13 @@ Replaces all mutable fields of a workflow (full replacement, not partial patch).
 **Path param:** `id` — UUID v7 string.
 
 **Request body:**
+
 ```json
 {
   "name": "Updated Pipeline Name",
   "description": "Updated description",
   "definition": {
-    "nodes": [
-      { "id": "step-1", "type": "echo" }
-    ]
+    "nodes": [{ "id": "step-1", "type": "echo" }]
   }
 }
 ```
@@ -201,6 +204,7 @@ Triggers a new execution of the workflow. Creates a `workflow_run` row and immed
 An empty object `{}` is valid.
 
 **Response 202:**
+
 ```json
 {
   "message": "workflow queued for execution",
@@ -214,7 +218,7 @@ Use the `run_id` to poll `GET /api/v1/runs/:id` for status.
 **Response 404:** workflow not found.
 **Response 500:** failed to create the `workflow_run` row.
 
-> The response is 202 even if the workflow definition is invalid. Definition parsing and node loading happen inside the goroutine *after* the response is sent. An invalid definition will result in the run being marked `failed` asynchronously.
+> The response is 202 even if the workflow definition is invalid. Definition parsing and node loading happen inside the goroutine _after_ the response is sent. An invalid definition will result in the run being marked `failed` asynchronously.
 
 ---
 
@@ -225,6 +229,7 @@ Lists all runs for a workflow, ordered by `created_at DESC`. Returns up to 100 r
 **Path param:** `id` — workflow UUID.
 
 **Response 200:**
+
 ```json
 [
   {
@@ -270,6 +275,7 @@ Lists all node execution records for a run, ordered by `created_at ASC` (executi
 **Path param:** `id` — run UUID.
 
 **Response 200:**
+
 ```json
 [
   {
@@ -300,6 +306,87 @@ Returns `[]` when no node executions exist (e.g., the run failed before any node
 
 ---
 
+### `GET /api/v1/runs/:id/stream`
+
+Streams real-time Server-Sent Events (SSE) as a run progresses.
+
+**Path param:** `id` — run UUID.
+
+**Response headers:**
+
+```
+Content-Type: text/event-stream
+Cache-Control: no-cache
+Connection: keep-alive
+```
+
+**Response 400:** `id` is not a valid UUID.
+**Response 404:** run not found.
+
+#### Behaviour
+
+- If the run is already in a terminal state (`completed`, `failed`, `cancelled`) when the client connects, the server emits the corresponding terminal event immediately and closes the stream.
+- For an active run, the server streams events as they are published by the workflow engine.
+- After a terminal event the server closes the stream. The browser `EventSource` API will **not** auto-reconnect once the server closes the connection.
+- If the client disconnects (tab closed, navigation away), the server detects the context cancellation and stops sending without leaking goroutines.
+- Multiple concurrent clients may subscribe to the same run — each receives all events independently.
+
+#### Event Catalog
+
+Each SSE message has the form:
+
+```
+event: <type>
+data: <JSON payload>
+
+```
+
+| Event type       | Emitted when                             | Payload fields                     |
+| ---------------- | ---------------------------------------- | ---------------------------------- |
+| `run.started`    | Run begins executing                     | `run_id`, `status`                 |
+| `node.started`   | A node begins executing                  | `node_id`, `input`                 |
+| `node.completed` | A node finishes successfully             | `node_id`, `output`, `duration_ms` |
+| `node.failed`    | A node fails permanently                 | `node_id`, `error`                 |
+| `node.retrying`  | A node is about to be retried            | `node_id`, `attempt`, `error`      |
+| `run.completed`  | Run finishes successfully (**terminal**) | `run_id`, `status`, `output`       |
+| `run.failed`     | Run fails (**terminal**)                 | `run_id`, `status`, `error`        |
+| `run.cancelled`  | Run is cancelled (**terminal**)          | `run_id`, `status`                 |
+
+#### Example stream
+
+```
+event: run.started
+data: {"run_id":"019547b3-...","status":"running"}
+
+event: node.started
+data: {"node_id":"fetch-content","input":{"url":"https://example.com"}}
+
+event: node.completed
+data: {"node_id":"fetch-content","output":{"body":"..."},"duration_ms":342}
+
+event: run.completed
+data: {"run_id":"019547b3-...","status":"completed","output":{"body":"..."}}
+```
+
+#### Frontend usage
+
+The run detail page (`web/src/routes/runs/[id]/+page.svelte`) opens an `EventSource` automatically when the run is active and shows a **LIVE** indicator:
+
+```ts
+const source = new EventSource(`/api/v1/runs/${runId}/stream`);
+
+source.addEventListener("node.completed", (e) => {
+  const data = JSON.parse(e.data);
+  // data.node_id, data.output, data.duration_ms
+});
+
+source.addEventListener("run.completed", (e) => {
+  source.close();
+});
+```
+
+---
+
 ## Error Response Shape
 
 All error responses use the same envelope:
@@ -312,24 +399,25 @@ All error responses use the same envelope:
 
 ## Endpoint Summary
 
-| Method | Path | Description |
-|---|---|---|
-| `GET` | `/api/v1/health` | Liveness probe |
-| `GET` | `/api/v1/readiness` | Readiness probe (DB ping) |
-| `POST` | `/api/v1/workflows` | Create workflow |
-| `GET` | `/api/v1/workflows` | List workflows |
-| `GET` | `/api/v1/workflows/:id` | Get workflow |
-| `PUT` | `/api/v1/workflows/:id` | Update workflow |
-| `DELETE` | `/api/v1/workflows/:id` | Delete workflow (cascades runs) |
-| `POST` | `/api/v1/workflows/:id/trigger` | Trigger a run |
-| `GET` | `/api/v1/workflows/:id/runs` | List runs for a workflow |
-| `GET` | `/api/v1/runs/:id` | Get run status and output |
-| `GET` | `/api/v1/runs/:id/nodes` | Get per-node execution detail |
-| `POST` | `/api/v1/runs/:id/cancel` | Cancel an in-progress run |
-| `POST` | `/api/v1/workflows/:id/schedules` | Create a cron schedule |
-| `GET` | `/api/v1/workflows/:id/schedules` | List schedules for a workflow |
-| `DELETE` | `/api/v1/schedules/:id` | Delete a schedule |
-| `PATCH` | `/api/v1/schedules/:id` | Update a schedule |
+| Method   | Path                              | Description                      |
+| -------- | --------------------------------- | -------------------------------- |
+| `GET`    | `/api/v1/health`                  | Liveness probe                   |
+| `GET`    | `/api/v1/readiness`               | Readiness probe (DB ping)        |
+| `POST`   | `/api/v1/workflows`               | Create workflow                  |
+| `GET`    | `/api/v1/workflows`               | List workflows                   |
+| `GET`    | `/api/v1/workflows/:id`           | Get workflow                     |
+| `PUT`    | `/api/v1/workflows/:id`           | Update workflow                  |
+| `DELETE` | `/api/v1/workflows/:id`           | Delete workflow (cascades runs)  |
+| `POST`   | `/api/v1/workflows/:id/trigger`   | Trigger a run                    |
+| `GET`    | `/api/v1/workflows/:id/runs`      | List runs for a workflow         |
+| `GET`    | `/api/v1/runs/:id`                | Get run status and output        |
+| `GET`    | `/api/v1/runs/:id/nodes`          | Get per-node execution detail    |
+| `GET`    | `/api/v1/runs/:id/stream`         | Stream live SSE events for a run |
+| `POST`   | `/api/v1/runs/:id/cancel`         | Cancel an in-progress run        |
+| `POST`   | `/api/v1/workflows/:id/schedules` | Create a cron schedule           |
+| `GET`    | `/api/v1/workflows/:id/schedules` | List schedules for a workflow    |
+| `DELETE` | `/api/v1/schedules/:id`           | Delete a schedule                |
+| `PATCH`  | `/api/v1/schedules/:id`           | Update a schedule                |
 
 ---
 
@@ -341,22 +429,22 @@ The SvelteKit frontend wraps all endpoints in typed async functions. All functio
 
 ```ts
 import {
-  listWorkflows,       // GET /workflows
-  getWorkflow,         // GET /workflows/:id
-  createWorkflow,      // POST /workflows
-  updateWorkflow,      // PUT /workflows/:id
-  deleteWorkflow,      // DELETE /workflows/:id
-  triggerWorkflow,     // POST /workflows/:id/trigger
-  listWorkflowRuns,    // GET /workflows/:id/runs
-  getWorkflowRun,      // GET /runs/:id
-  listNodeExecutions,  // GET /runs/:id/nodes
-  cancelRun,           // POST /runs/:id/cancel
-  createSchedule,      // POST /workflows/:id/schedules
-  listSchedules,       // GET /workflows/:id/schedules
-  deleteSchedule,      // DELETE /schedules/:id
-  updateSchedule,      // PATCH /schedules/:id
-  ApiError
-} from '$lib/api';
+  listWorkflows, // GET /workflows
+  getWorkflow, // GET /workflows/:id
+  createWorkflow, // POST /workflows
+  updateWorkflow, // PUT /workflows/:id
+  deleteWorkflow, // DELETE /workflows/:id
+  triggerWorkflow, // POST /workflows/:id/trigger
+  listWorkflowRuns, // GET /workflows/:id/runs
+  getWorkflowRun, // GET /runs/:id
+  listNodeExecutions, // GET /runs/:id/nodes
+  cancelRun, // POST /runs/:id/cancel
+  createSchedule, // POST /workflows/:id/schedules
+  listSchedules, // GET /workflows/:id/schedules
+  deleteSchedule, // DELETE /schedules/:id
+  updateSchedule, // PATCH /schedules/:id
+  ApiError,
+} from "$lib/api";
 ```
 
 The base URL is `/api/v1`, proxied to the Go server via the Vite dev server config. The `VITE_API_KEY` env var is included automatically in every request header.

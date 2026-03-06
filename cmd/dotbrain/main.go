@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/devaldrete/dotbrain/internal/api"
+	dbmigrate "github.com/devaldrete/dotbrain/internal/db/migrate"
 	"github.com/devaldrete/dotbrain/internal/db/sqlc"
 	"github.com/devaldrete/dotbrain/internal/scheduler"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -34,6 +35,15 @@ func main() {
 
 	// 3. Initialize API Router
 	dbURL := os.Getenv("DATABASE_URL")
+
+	// Run database migrations before connecting the pool.
+	// This ensures the schema is always up to date on startup.
+	if err := dbmigrate.Up(dbURL); err != nil {
+		logger.Error("database migration failed", "error", err)
+		os.Exit(1)
+	}
+	logger.Info("database migrations applied successfully")
+
 	pool, err := pgxpool.New(context.Background(), dbURL)
 	if err != nil {
 		logger.Error(fmt.Sprintf("Unable to connect to database: %v", err))
@@ -89,9 +99,11 @@ func main() {
 	srv := &http.Server{
 		Addr:    fmt.Sprintf(":%s", port),
 		Handler: router,
-		// Good practice to set timeouts to prevent slowloris attacks
+		// Good practice to set timeouts to prevent slowloris attacks.
+		// WriteTimeout is intentionally 0 (disabled) so that SSE connections
+		// (GET /runs/:id/stream) are not killed by the server after 15 s.
 		ReadTimeout:  15 * time.Second,
-		WriteTimeout: 15 * time.Second,
+		WriteTimeout: 0,
 		IdleTimeout:  60 * time.Second,
 	}
 

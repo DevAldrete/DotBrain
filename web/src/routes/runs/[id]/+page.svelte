@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { onMount, onDestroy } from 'svelte';
 	import { page } from '$app/state';
 	import { getWorkflowRun, listNodeExecutions, cancelRun } from '$lib/api';
 	import type { WorkflowRun, NodeExecution } from '$lib/types';
@@ -14,10 +14,12 @@
 	let loading = $state(true);
 	let error = $state<string | null>(null);
 	let expandedNode = $state<string | null>(null);
-	let polling = $state(false);
-	let pollTimer = $state<ReturnType<typeof setInterval> | null>(null);
+	let streaming = $state(false);
 	let cancelling = $state(false);
 	let cancelError = $state<string | null>(null);
+
+	// EventSource instance — not reactive state, just a plain variable
+	let eventSource: EventSource | null = null;
 
 	const isActive = $derived(run?.Status === 'pending' || run?.Status === 'running');
 
@@ -28,10 +30,7 @@
 		try {
 			await cancelRun(id);
 			// Reload data to get updated status
-			const [r, n] = await Promise.all([
-				getWorkflowRun(id),
-				listNodeExecutions(id)
-			]);
+			const [r, n] = await Promise.all([getWorkflowRun(id), listNodeExecutions(id)]);
 			run = r;
 			nodes = n;
 		} catch (e) {
@@ -41,42 +40,78 @@
 		}
 	}
 
+	function openStream(runId: string) {
+		if (eventSource) return; // already open
+		streaming = true;
+		eventSource = new EventSource(`/api/v1/runs/${runId}/stream`);
+
+		// Node lifecycle events — refresh the node list for accurate data
+		const refreshNodes = () => {
+			listNodeExecutions(runId)
+				.then((n) => {
+					nodes = n;
+				})
+				.catch(() => {});
+		};
+		eventSource.addEventListener('node.started', refreshNodes);
+		eventSource.addEventListener('node.completed', refreshNodes);
+		eventSource.addEventListener('node.failed', refreshNodes);
+		eventSource.addEventListener('node.retrying', refreshNodes);
+
+		// Run terminal events — patch run state then close stream
+		const onTerminal = (e: MessageEvent, status: WorkflowRun['Status']) => {
+			const data = JSON.parse((e as MessageEvent).data ?? '{}');
+			if (run) {
+				run = {
+					...run,
+					Status: status,
+					...(data.output !== undefined ? { OutputData: data.output } : {}),
+					...(data.error !== undefined ? { Error: data.error } : {})
+				};
+			}
+			refreshNodes();
+			closeStream();
+		};
+		eventSource.addEventListener('run.completed', (e) =>
+			onTerminal(e as MessageEvent, 'completed')
+		);
+		eventSource.addEventListener('run.failed', (e) => onTerminal(e as MessageEvent, 'failed'));
+		eventSource.addEventListener('run.cancelled', (e) =>
+			onTerminal(e as MessageEvent, 'cancelled')
+		);
+
+		eventSource.onerror = () => {
+			// EventSource auto-reconnects on transient errors; close only on final error
+			closeStream();
+		};
+	}
+
+	function closeStream() {
+		if (eventSource) {
+			eventSource.close();
+			eventSource = null;
+		}
+		streaming = false;
+	}
+
 	onMount(() => {
 		loadData();
-		return () => {
-			if (pollTimer) clearInterval(pollTimer);
-		};
+	});
+
+	onDestroy(() => {
+		closeStream();
 	});
 
 	async function loadData() {
-		loading = !run; // only show full loading on first load
+		loading = !run; // only show full-page skeleton on first load
 		error = null;
 		try {
-			const [r, n] = await Promise.all([
-				getWorkflowRun(id),
-				listNodeExecutions(id)
-			]);
+			const [r, n] = await Promise.all([getWorkflowRun(id), listNodeExecutions(id)]);
 			run = r;
 			nodes = n;
 
-			// Auto-poll if running
-			if ((r.Status === 'pending' || r.Status === 'running') && !pollTimer) {
-				polling = true;
-				pollTimer = setInterval(async () => {
-					try {
-						const [r2, n2] = await Promise.all([
-							getWorkflowRun(id),
-							listNodeExecutions(id)
-						]);
-						run = r2;
-						nodes = n2;
-						if (r2.Status !== 'pending' && r2.Status !== 'running') {
-							if (pollTimer) clearInterval(pollTimer);
-							pollTimer = null;
-							polling = false;
-						}
-					} catch { /* ignore polling errors */ }
-				}, 1500);
+			if (r.Status === 'pending' || r.Status === 'running') {
+				openStream(r.ID);
 			}
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to load run';
@@ -88,77 +123,97 @@
 	function toggleNode(nodeId: string) {
 		expandedNode = expandedNode === nodeId ? null : nodeId;
 	}
-
-	function statusIcon(status: string): string {
-		switch (status) {
-			case 'completed': return 'check';
-			case 'failed': return 'x';
-			case 'running': return 'loading';
-			default: return 'dot';
-		}
-	}
 </script>
 
 <svelte:head>
 	<title>Run {id?.slice(0, 8)} // DotBrain</title>
 </svelte:head>
 
-<div class="p-8 max-w-5xl">
+<div class="max-w-5xl p-8">
 	{#if loading}
-		<div class="animate-pulse space-y-6 slide-up">
-			<div class="h-4 w-32 bg-white/5 rounded"></div>
-			<div class="h-8 w-64 bg-white/5 rounded"></div>
-			<div class="space-y-4 mt-8">
+		<div class="slide-up animate-pulse space-y-6">
+			<div class="h-4 w-32 rounded bg-white/5"></div>
+			<div class="h-8 w-64 rounded bg-white/5"></div>
+			<div class="mt-8 space-y-4">
 				{#each Array(3) as _}
-					<div class="h-24 bg-white/5 rounded"></div>
+					<div class="h-24 rounded bg-white/5"></div>
 				{/each}
 			</div>
 		</div>
 	{:else if error}
-		<div class="bg-red-500/5 border border-red-500/20 rounded-sm p-8 text-center slide-up">
-			<div class="text-red-400 font-mono text-sm mb-2">ERR_RUN_NOT_FOUND</div>
-			<p class="text-white/60 text-sm">{error}</p>
-			<a href="/workflows" class="mt-4 inline-block px-4 py-2 bg-white/5 border border-white/10 text-xs font-mono uppercase tracking-wider hover:bg-white/10 transition-colors">
+		<div class="slide-up rounded-sm border border-red-500/20 bg-red-500/5 p-8 text-center">
+			<div class="mb-2 font-mono text-sm text-red-400">ERR_RUN_NOT_FOUND</div>
+			<p class="text-sm text-white/60">{error}</p>
+			<a
+				href="/workflows"
+				class="mt-4 inline-block border border-white/10 bg-white/5 px-4 py-2 font-mono text-xs tracking-wider uppercase transition-colors hover:bg-white/10"
+			>
 				Back to Workflows
 			</a>
 		</div>
 	{:else if run}
 		<!-- Breadcrumb -->
-		<div class="flex items-center gap-2 text-xs font-mono text-muted mb-6 slide-up">
-			<a href="/workflows" class="hover:text-brand transition-colors">Workflows</a>
+		<div class="slide-up mb-6 flex items-center gap-2 font-mono text-xs text-muted">
+			<a href="/workflows" class="transition-colors hover:text-brand">Workflows</a>
 			<span>/</span>
-			<a href="/workflows/{run.WorkflowID}" class="hover:text-brand transition-colors truncate max-w-[120px]">{run.WorkflowID}</a>
+			<a
+				href="/workflows/{run.WorkflowID}"
+				class="max-w-[120px] truncate transition-colors hover:text-brand">{run.WorkflowID}</a
+			>
 			<span>/</span>
-			<span class="text-white/70 truncate max-w-[120px]">{run.ID}</span>
+			<span class="max-w-[120px] truncate text-white/70">{run.ID}</span>
 		</div>
 
 		<!-- Header -->
-		<div class="flex items-start justify-between mb-8 slide-up stagger-1">
+		<div class="slide-up stagger-1 mb-8 flex items-start justify-between">
 			<div>
-				<div class="flex items-center gap-4 mb-2">
-					<h1 class="font-sans font-black text-3xl tracking-tight text-white">Run</h1>
+				<div class="mb-2 flex items-center gap-4">
+					<h1 class="font-sans text-3xl font-black tracking-tight text-white">Run</h1>
 					<StatusBadge status={run.Status} />
-					{#if polling}
-						<span class="text-[10px] font-mono text-cyan-400 animate-pulse uppercase tracking-wider">LIVE</span>
+					{#if streaming}
+						<span class="animate-pulse font-mono text-[10px] tracking-wider text-cyan-400 uppercase"
+							>LIVE</span
+						>
 					{/if}
 				</div>
-				<p class="text-xs font-mono text-muted">{run.ID}</p>
+				<p class="font-mono text-xs text-muted">{run.ID}</p>
 			</div>
 			{#if isActive}
 				<button
 					onclick={handleCancel}
 					disabled={cancelling}
-					class="flex items-center gap-2 border border-red-500/30 bg-red-500/5 text-red-400 font-bold text-xs uppercase tracking-wider px-5 py-3 hover:bg-red-500/10 hover:border-red-500/50 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
+					class="flex items-center gap-2 border border-red-500/30 bg-red-500/5 px-5 py-3 text-xs font-bold tracking-wider text-red-400 uppercase transition-all duration-200 hover:border-red-500/50 hover:bg-red-500/10 disabled:cursor-not-allowed disabled:opacity-50"
 				>
 					{#if cancelling}
-						<svg class="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
-							<circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-							<path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+						<svg class="h-3.5 w-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
+							<circle
+								class="opacity-25"
+								cx="12"
+								cy="12"
+								r="10"
+								stroke="currentColor"
+								stroke-width="4"
+							></circle>
+							<path
+								class="opacity-75"
+								fill="currentColor"
+								d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+							></path>
 						</svg>
 						Cancelling...
 					{:else}
-						<svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-							<path stroke-linecap="round" stroke-linejoin="round" d="M5.25 7.5A2.25 2.25 0 017.5 5.25h9a2.25 2.25 0 012.25 2.25v9a2.25 2.25 0 01-2.25 2.25h-9a2.25 2.25 0 01-2.25-2.25v-9z" />
+						<svg
+							class="h-4 w-4"
+							fill="none"
+							viewBox="0 0 24 24"
+							stroke="currentColor"
+							stroke-width="2"
+						>
+							<path
+								stroke-linecap="round"
+								stroke-linejoin="round"
+								d="M5.25 7.5A2.25 2.25 0 017.5 5.25h9a2.25 2.25 0 012.25 2.25v9a2.25 2.25 0 01-2.25 2.25h-9a2.25 2.25 0 01-2.25-2.25v-9z"
+							/>
 						</svg>
 						Cancel Run
 					{/if}
@@ -168,56 +223,80 @@
 
 		<!-- Cancel Error -->
 		{#if cancelError}
-			<div class="bg-red-500/5 border border-red-500/20 rounded-sm p-4 mb-6 slide-up">
+			<div class="slide-up mb-6 rounded-sm border border-red-500/20 bg-red-500/5 p-4">
 				<div class="flex items-center gap-2">
-					<svg class="w-4 h-4 text-red-400 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-						<path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z" />
+					<svg
+						class="h-4 w-4 flex-shrink-0 text-red-400"
+						fill="none"
+						viewBox="0 0 24 24"
+						stroke="currentColor"
+						stroke-width="2"
+					>
+						<path
+							stroke-linecap="round"
+							stroke-linejoin="round"
+							d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z"
+						/>
 					</svg>
-					<span class="text-sm font-mono text-red-400">{cancelError}</span>
+					<span class="font-mono text-sm text-red-400">{cancelError}</span>
 				</div>
 			</div>
 		{/if}
 
 		<!-- Stats Row -->
-		<div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-10 slide-up stagger-2">
-			<div class="bg-surface border border-border rounded-sm p-4">
-				<div class="text-[10px] font-mono text-muted uppercase tracking-wider mb-1">Duration</div>
+		<div class="slide-up stagger-2 mb-10 grid grid-cols-2 gap-3 sm:grid-cols-4">
+			<div class="rounded-sm border border-border bg-surface p-4">
+				<div class="mb-1 font-mono text-[10px] tracking-wider text-muted uppercase">Duration</div>
 				<div class="font-mono text-sm text-white">{duration(run.StartedAt, run.CompletedAt)}</div>
 			</div>
-			<div class="bg-surface border border-border rounded-sm p-4">
-				<div class="text-[10px] font-mono text-muted uppercase tracking-wider mb-1">Nodes</div>
+			<div class="rounded-sm border border-border bg-surface p-4">
+				<div class="mb-1 font-mono text-[10px] tracking-wider text-muted uppercase">Nodes</div>
 				<div class="font-mono text-sm text-white">{nodes.length}</div>
 			</div>
-			<div class="bg-surface border border-border rounded-sm p-4">
-				<div class="text-[10px] font-mono text-muted uppercase tracking-wider mb-1">Started</div>
+			<div class="rounded-sm border border-border bg-surface p-4">
+				<div class="mb-1 font-mono text-[10px] tracking-wider text-muted uppercase">Started</div>
 				<div class="font-mono text-sm text-white">{formatDate(run.StartedAt)}</div>
 			</div>
-			<div class="bg-surface border border-border rounded-sm p-4">
-				<div class="text-[10px] font-mono text-muted uppercase tracking-wider mb-1">Completed</div>
+			<div class="rounded-sm border border-border bg-surface p-4">
+				<div class="mb-1 font-mono text-[10px] tracking-wider text-muted uppercase">Completed</div>
 				<div class="font-mono text-sm text-white">{formatDate(run.CompletedAt)}</div>
 			</div>
 		</div>
 
 		<!-- Error Banner -->
 		{#if run.Error}
-			<div class="bg-red-500/5 border border-red-500/20 rounded-sm p-4 mb-8 slide-up stagger-2">
-				<div class="flex items-center gap-2 mb-2">
-					<svg class="w-4 h-4 text-red-400 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-						<path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z" />
+			<div class="slide-up stagger-2 mb-8 rounded-sm border border-red-500/20 bg-red-500/5 p-4">
+				<div class="mb-2 flex items-center gap-2">
+					<svg
+						class="h-4 w-4 flex-shrink-0 text-red-400"
+						fill="none"
+						viewBox="0 0 24 24"
+						stroke="currentColor"
+						stroke-width="2"
+					>
+						<path
+							stroke-linecap="round"
+							stroke-linejoin="round"
+							d="M12 9v3.75m9-.75a9 9 0 11-18 0 9 9 0 0118 0zm-9 3.75h.008v.008H12v-.008z"
+						/>
 					</svg>
-					<span class="text-xs font-mono text-red-400 uppercase tracking-wider">Execution Error</span>
+					<span class="font-mono text-xs tracking-wider text-red-400 uppercase"
+						>Execution Error</span
+					>
 				</div>
-				<pre class="text-sm font-mono text-red-300/80 whitespace-pre-wrap">{run.Error}</pre>
+				<pre class="font-mono text-sm whitespace-pre-wrap text-red-300/80">{run.Error}</pre>
 			</div>
 		{/if}
 
 		<!-- Node Execution Timeline -->
 		<div class="slide-up stagger-3">
-			<h2 class="text-xs font-mono text-muted uppercase tracking-widest mb-5">Node Execution Timeline</h2>
+			<h2 class="mb-5 font-mono text-xs tracking-widest text-muted uppercase">
+				Node Execution Timeline
+			</h2>
 
 			{#if nodes.length === 0}
-				<div class="border border-dashed border-border rounded-sm p-12 text-center">
-					<p class="text-sm text-muted font-mono">
+				<div class="rounded-sm border border-dashed border-border p-12 text-center">
+					<p class="font-mono text-sm text-muted">
 						{#if run.Status === 'pending' || run.Status === 'running'}
 							Waiting for node executions...
 						{:else}
@@ -228,34 +307,62 @@
 			{:else}
 				<div class="relative">
 					<!-- Timeline line -->
-					<div class="absolute left-[18px] top-0 bottom-0 w-[1px] bg-border"></div>
+					<div class="absolute top-0 bottom-0 left-[18px] w-[1px] bg-border"></div>
 
 					<div class="space-y-3">
 						{#each nodes as node, i}
 							{@const isExpanded = expandedNode === node.ID}
 							{@const meta = getNodeMeta(node.NodeID.split('-')[0] ?? '')}
-							<div class="relative pl-12 slide-up" style="animation-delay: {(i + 3) * 60}ms">
+							<div class="slide-up relative pl-12" style="animation-delay: {(i + 3) * 60}ms">
 								<!-- Timeline dot -->
-								<div class="absolute left-[10px] top-[18px] z-10">
+								<div class="absolute top-[18px] left-[10px] z-10">
 									{#if node.Status === 'completed'}
-										<div class="w-[18px] h-[18px] rounded-full bg-emerald-500/20 border border-emerald-500/50 flex items-center justify-center">
-											<svg class="w-2.5 h-2.5 text-emerald-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="3">
-												<path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5" />
+										<div
+											class="flex h-[18px] w-[18px] items-center justify-center rounded-full border border-emerald-500/50 bg-emerald-500/20"
+										>
+											<svg
+												class="h-2.5 w-2.5 text-emerald-400"
+												fill="none"
+												viewBox="0 0 24 24"
+												stroke="currentColor"
+												stroke-width="3"
+											>
+												<path
+													stroke-linecap="round"
+													stroke-linejoin="round"
+													d="M4.5 12.75l6 6 9-13.5"
+												/>
 											</svg>
 										</div>
 									{:else if node.Status === 'failed'}
-										<div class="w-[18px] h-[18px] rounded-full bg-red-500/20 border border-red-500/50 flex items-center justify-center">
-											<svg class="w-2.5 h-2.5 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="3">
-												<path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+										<div
+											class="flex h-[18px] w-[18px] items-center justify-center rounded-full border border-red-500/50 bg-red-500/20"
+										>
+											<svg
+												class="h-2.5 w-2.5 text-red-400"
+												fill="none"
+												viewBox="0 0 24 24"
+												stroke="currentColor"
+												stroke-width="3"
+											>
+												<path
+													stroke-linecap="round"
+													stroke-linejoin="round"
+													d="M6 18L18 6M6 6l12 12"
+												/>
 											</svg>
 										</div>
 									{:else if node.Status === 'running'}
-										<div class="w-[18px] h-[18px] rounded-full bg-cyan-500/20 border border-cyan-500/50 flex items-center justify-center animate-pulse">
-											<div class="w-2 h-2 rounded-full bg-cyan-400"></div>
+										<div
+											class="flex h-[18px] w-[18px] animate-pulse items-center justify-center rounded-full border border-cyan-500/50 bg-cyan-500/20"
+										>
+											<div class="h-2 w-2 rounded-full bg-cyan-400"></div>
 										</div>
 									{:else}
-										<div class="w-[18px] h-[18px] rounded-full bg-white/5 border border-white/20 flex items-center justify-center">
-											<div class="w-1.5 h-1.5 rounded-full bg-white/30"></div>
+										<div
+											class="flex h-[18px] w-[18px] items-center justify-center rounded-full border border-white/20 bg-white/5"
+										>
+											<div class="h-1.5 w-1.5 rounded-full bg-white/30"></div>
 										</div>
 									{/if}
 								</div>
@@ -263,54 +370,89 @@
 								<!-- Node Card -->
 								<button
 									onclick={() => toggleNode(node.ID)}
-									class="w-full text-left bg-surface border border-border rounded-sm hover:border-brand/20 transition-all duration-150 {isExpanded ? 'border-brand/20' : ''}"
+									class="w-full rounded-sm border border-border bg-surface text-left transition-all duration-150 hover:border-brand/20 {isExpanded
+										? 'border-brand/20'
+										: ''}"
 								>
 									<div class="px-5 py-4">
 										<div class="flex items-center justify-between">
 											<div class="flex items-center gap-3">
-												<span class="font-mono text-sm text-white font-medium">{node.NodeID}</span>
+												<span class="font-mono text-sm font-medium text-white">{node.NodeID}</span>
 												<StatusBadge status={node.Status} />
 											</div>
 											<div class="flex items-center gap-3">
 												{#if node.StartedAt}
-													<span class="text-xs font-mono text-muted">{duration(node.StartedAt, node.CompletedAt)}</span>
+													<span class="font-mono text-xs text-muted"
+														>{duration(node.StartedAt, node.CompletedAt)}</span
+													>
 												{/if}
-												<svg class="w-3.5 h-3.5 text-muted transition-transform {isExpanded ? 'rotate-180' : ''}" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5">
-													<path stroke-linecap="round" stroke-linejoin="round" d="M19.5 8.25l-7.5 7.5-7.5-7.5" />
+												<svg
+													class="h-3.5 w-3.5 text-muted transition-transform {isExpanded
+														? 'rotate-180'
+														: ''}"
+													fill="none"
+													viewBox="0 0 24 24"
+													stroke="currentColor"
+													stroke-width="1.5"
+												>
+													<path
+														stroke-linecap="round"
+														stroke-linejoin="round"
+														d="M19.5 8.25l-7.5 7.5-7.5-7.5"
+													/>
 												</svg>
 											</div>
 										</div>
 										{#if node.Error}
-											<div class="mt-2 text-xs font-mono text-red-400/70 truncate">{node.Error}</div>
+											<div class="mt-2 truncate font-mono text-xs text-red-400/70">
+												{node.Error}
+											</div>
 										{/if}
 									</div>
 
 									{#if isExpanded}
-										<div class="border-t border-border px-5 py-4 space-y-4">
+										<div class="space-y-4 border-t border-border px-5 py-4">
 											<!-- Input -->
 											<div>
-												<div class="text-[10px] font-mono text-muted uppercase tracking-wider mb-2">Input</div>
-												<pre class="bg-surface-dim border border-border-subtle rounded-sm p-3 text-xs font-mono text-white/60 overflow-x-auto max-h-48 overflow-y-auto">{prettyData(node.InputData)}</pre>
+												<div class="mb-2 font-mono text-[10px] tracking-wider text-muted uppercase">
+													Input
+												</div>
+												<pre
+													class="max-h-48 overflow-x-auto overflow-y-auto rounded-sm border border-border-subtle bg-surface-dim p-3 font-mono text-xs text-white/60">{prettyData(
+														node.InputData
+													)}</pre>
 											</div>
 
 											<!-- Output -->
 											{#if node.OutputData}
 												<div>
-													<div class="text-[10px] font-mono text-muted uppercase tracking-wider mb-2">Output</div>
-													<pre class="bg-surface-dim border border-border-subtle rounded-sm p-3 text-xs font-mono text-white/60 overflow-x-auto max-h-48 overflow-y-auto">{prettyData(node.OutputData)}</pre>
+													<div
+														class="mb-2 font-mono text-[10px] tracking-wider text-muted uppercase"
+													>
+														Output
+													</div>
+													<pre
+														class="max-h-48 overflow-x-auto overflow-y-auto rounded-sm border border-border-subtle bg-surface-dim p-3 font-mono text-xs text-white/60">{prettyData(
+															node.OutputData
+														)}</pre>
 												</div>
 											{/if}
 
 											<!-- Error Detail -->
 											{#if node.Error}
 												<div>
-													<div class="text-[10px] font-mono text-red-400 uppercase tracking-wider mb-2">Error</div>
-													<pre class="bg-red-500/5 border border-red-500/10 rounded-sm p-3 text-xs font-mono text-red-300/80 whitespace-pre-wrap">{node.Error}</pre>
+													<div
+														class="mb-2 font-mono text-[10px] tracking-wider text-red-400 uppercase"
+													>
+														Error
+													</div>
+													<pre
+														class="rounded-sm border border-red-500/10 bg-red-500/5 p-3 font-mono text-xs whitespace-pre-wrap text-red-300/80">{node.Error}</pre>
 												</div>
 											{/if}
 
 											<!-- Timestamps -->
-											<div class="flex gap-6 text-[10px] font-mono text-muted">
+											<div class="flex gap-6 font-mono text-[10px] text-muted">
 												<span>Started: {formatDate(node.StartedAt)}</span>
 												<span>Completed: {formatDate(node.CompletedAt)}</span>
 											</div>
@@ -325,18 +467,28 @@
 		</div>
 
 		<!-- Run Input/Output -->
-		<div class="mt-10 grid grid-cols-1 md:grid-cols-2 gap-4 slide-up stagger-4">
+		<div class="slide-up stagger-4 mt-10 grid grid-cols-1 gap-4 md:grid-cols-2">
 			<details>
-				<summary class="text-xs font-mono text-muted uppercase tracking-widest cursor-pointer hover:text-white/60 transition-colors select-none mb-3">
+				<summary
+					class="mb-3 cursor-pointer font-mono text-xs tracking-widest text-muted uppercase transition-colors select-none hover:text-white/60"
+				>
 					Run Input
 				</summary>
-				<pre class="bg-surface-dim border border-border rounded-sm p-4 text-xs font-mono text-white/60 overflow-x-auto max-h-64 overflow-y-auto">{prettyData(run.InputData)}</pre>
+				<pre
+					class="max-h-64 overflow-x-auto overflow-y-auto rounded-sm border border-border bg-surface-dim p-4 font-mono text-xs text-white/60">{prettyData(
+						run.InputData
+					)}</pre>
 			</details>
 			<details>
-				<summary class="text-xs font-mono text-muted uppercase tracking-widest cursor-pointer hover:text-white/60 transition-colors select-none mb-3">
+				<summary
+					class="mb-3 cursor-pointer font-mono text-xs tracking-widest text-muted uppercase transition-colors select-none hover:text-white/60"
+				>
 					Run Output
 				</summary>
-				<pre class="bg-surface-dim border border-border rounded-sm p-4 text-xs font-mono text-white/60 overflow-x-auto max-h-64 overflow-y-auto">{prettyData(run.OutputData)}</pre>
+				<pre
+					class="max-h-64 overflow-x-auto overflow-y-auto rounded-sm border border-border bg-surface-dim p-4 font-mono text-xs text-white/60">{prettyData(
+						run.OutputData
+					)}</pre>
 			</details>
 		</div>
 	{/if}

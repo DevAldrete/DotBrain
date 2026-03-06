@@ -2,6 +2,7 @@ package core_test
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -117,6 +118,7 @@ func TestEngine_LoadFromDefinition_NilParamsSafe(t *testing.T) {
 }
 
 type recordingHook struct {
+	mu        sync.Mutex
 	starts    []string
 	completes []string
 	failures  []string
@@ -124,18 +126,26 @@ type recordingHook struct {
 }
 
 func (h *recordingHook) OnNodeStart(ctx context.Context, nodeID string, input map[string]any) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	h.starts = append(h.starts, nodeID)
 }
 
 func (h *recordingHook) OnNodeComplete(ctx context.Context, nodeID string, output map[string]any) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	h.completes = append(h.completes, nodeID)
 }
 
 func (h *recordingHook) OnNodeFail(ctx context.Context, nodeID string, err error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	h.failures = append(h.failures, nodeID)
 }
 
 func (h *recordingHook) OnNodeRetry(ctx context.Context, nodeID string, attempt int, err error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	h.retries = append(h.retries, nodeID)
 }
 

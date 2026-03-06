@@ -24,6 +24,7 @@ type API struct {
 	queries    *db.Queries
 	activeRuns activeRunRegistry
 	scheduler  *scheduler.Scheduler
+	bus        *EventBus
 }
 
 func NewAPI(pool *pgxpool.Pool) *API {
@@ -35,6 +36,7 @@ func NewAPI(pool *pgxpool.Pool) *API {
 		pool:       pool,
 		queries:    queries,
 		activeRuns: newActiveRunRegistry(),
+		bus:        NewEventBus(),
 	}
 }
 
@@ -86,6 +88,7 @@ func (a *API) NewRouter(apiKey string) *gin.Engine {
 	// Run Endpoints
 	v1.GET("/runs/:id", a.getRunHandler)
 	v1.GET("/runs/:id/nodes", a.listNodeExecutionsHandler)
+	v1.GET("/runs/:id/stream", a.streamRunHandler)
 	v1.POST("/runs/:id/cancel", a.cancelRunHandler)
 
 	// Schedule Endpoints
@@ -178,19 +181,22 @@ func (a *API) workflowTriggerHandler(c *gin.Context) {
 
 		// Transition to "running" with started_at
 		a.transitionToRunning(runCtx, runID)
+		a.bus.Publish(runIDStr, RunEvent{Type: "run.started", RunID: runIDStr})
 
 		// Setup Engine
 		engine := core.NewEngine()
-		engine.Hook = NewDBNodeHook(a.queries, runID)
+		engine.Hook = NewDBNodeHookWithBus(a.queries, runID, runIDStr, a.bus)
 
 		def, err := core.ParseDefinition(w.Definition)
 		if err != nil {
 			a.updateRunStatus(context.Background(), runID, "failed", nil, err.Error())
+			a.bus.Publish(runIDStr, RunEvent{Type: "run.failed", RunID: runIDStr, Data: map[string]any{"error": err.Error()}})
 			return
 		}
 
 		if err := engine.LoadFromDefinition(def); err != nil {
 			a.updateRunStatus(context.Background(), runID, "failed", nil, err.Error())
+			a.bus.Publish(runIDStr, RunEvent{Type: "run.failed", RunID: runIDStr, Data: map[string]any{"error": err.Error()}})
 			return
 		}
 
@@ -198,13 +204,16 @@ func (a *API) workflowTriggerHandler(c *gin.Context) {
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
 				a.updateRunStatus(context.Background(), runID, "cancelled", nil, "run was cancelled")
+				a.bus.Publish(runIDStr, RunEvent{Type: "run.cancelled", RunID: runIDStr})
 			} else {
 				a.updateRunStatus(context.Background(), runID, "failed", nil, err.Error())
+				a.bus.Publish(runIDStr, RunEvent{Type: "run.failed", RunID: runIDStr, Data: map[string]any{"error": err.Error()}})
 			}
 			return
 		}
 
 		a.updateRunStatus(context.Background(), runID, "completed", output, "")
+		a.bus.Publish(runIDStr, RunEvent{Type: "run.completed", RunID: runIDStr, Data: output})
 	}(pgRunID, runID.String(), workflow, payload)
 
 	c.JSON(http.StatusAccepted, gin.H{
@@ -554,18 +563,21 @@ func (a *API) TriggerWorkflow(ctx context.Context, workflowID pgtype.UUID, paylo
 		defer cancelRun()
 
 		a.transitionToRunning(runCtx, runID)
+		a.bus.Publish(runIDStr, RunEvent{Type: "run.started", RunID: runIDStr})
 
 		engine := core.NewEngine()
-		engine.Hook = NewDBNodeHook(a.queries, runID)
+		engine.Hook = NewDBNodeHookWithBus(a.queries, runID, runIDStr, a.bus)
 
 		def, err := core.ParseDefinition(w.Definition)
 		if err != nil {
 			a.updateRunStatus(context.Background(), runID, "failed", nil, err.Error())
+			a.bus.Publish(runIDStr, RunEvent{Type: "run.failed", RunID: runIDStr, Data: map[string]any{"error": err.Error()}})
 			return
 		}
 
 		if err := engine.LoadFromDefinition(def); err != nil {
 			a.updateRunStatus(context.Background(), runID, "failed", nil, err.Error())
+			a.bus.Publish(runIDStr, RunEvent{Type: "run.failed", RunID: runIDStr, Data: map[string]any{"error": err.Error()}})
 			return
 		}
 
@@ -573,13 +585,16 @@ func (a *API) TriggerWorkflow(ctx context.Context, workflowID pgtype.UUID, paylo
 		if err != nil {
 			if errors.Is(err, context.Canceled) {
 				a.updateRunStatus(context.Background(), runID, "cancelled", nil, "run was cancelled")
+				a.bus.Publish(runIDStr, RunEvent{Type: "run.cancelled", RunID: runIDStr})
 			} else {
 				a.updateRunStatus(context.Background(), runID, "failed", nil, err.Error())
+				a.bus.Publish(runIDStr, RunEvent{Type: "run.failed", RunID: runIDStr, Data: map[string]any{"error": err.Error()}})
 			}
 			return
 		}
 
 		a.updateRunStatus(context.Background(), runID, "completed", output, "")
+		a.bus.Publish(runIDStr, RunEvent{Type: "run.completed", RunID: runIDStr, Data: output})
 	}(pgRunID, runID.String(), workflow, payload)
 
 	return nil

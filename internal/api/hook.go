@@ -15,17 +15,39 @@ import (
 type DBNodeHook struct {
 	queries    *db.Queries
 	runID      pgtype.UUID
+	runIDStr   string    // string form used as EventBus key
+	bus        *EventBus // may be nil if streaming is not configured
 	executions map[string]pgtype.UUID
 	startTimes map[string]time.Time
 }
 
-// NewDBNodeHook creates a new DBNodeHook.
+// NewDBNodeHook creates a new DBNodeHook without an EventBus (backwards-compatible).
 func NewDBNodeHook(queries *db.Queries, runID pgtype.UUID) *DBNodeHook {
 	return &DBNodeHook{
 		queries:    queries,
 		runID:      runID,
 		executions: make(map[string]pgtype.UUID),
 		startTimes: make(map[string]time.Time),
+	}
+}
+
+// NewDBNodeHookWithBus creates a DBNodeHook that also publishes lifecycle events
+// to the provided EventBus so SSE subscribers receive real-time updates.
+func NewDBNodeHookWithBus(queries *db.Queries, runID pgtype.UUID, runIDStr string, bus *EventBus) *DBNodeHook {
+	return &DBNodeHook{
+		queries:    queries,
+		runID:      runID,
+		runIDStr:   runIDStr,
+		bus:        bus,
+		executions: make(map[string]pgtype.UUID),
+		startTimes: make(map[string]time.Time),
+	}
+}
+
+// publish sends an event to the EventBus if one is configured.
+func (h *DBNodeHook) publish(evt RunEvent) {
+	if h.bus != nil && h.runIDStr != "" {
+		h.bus.Publish(h.runIDStr, evt)
 	}
 }
 
@@ -55,6 +77,8 @@ func (h *DBNodeHook) OnNodeStart(ctx context.Context, nodeID string, input map[s
 		Status:        "running",
 		InputData:     inputBytes,
 	})
+
+	h.publish(RunEvent{Type: "node.started", RunID: h.runIDStr, NodeID: nodeID, Data: input})
 }
 
 // OnNodeComplete records the successful completion of a node.
@@ -85,6 +109,8 @@ func (h *DBNodeHook) OnNodeComplete(ctx context.Context, nodeID string, output m
 		StartedAt:   pgStartedAt,
 		CompletedAt: pgCompletedAt,
 	})
+
+	h.publish(RunEvent{Type: "node.completed", RunID: h.runIDStr, NodeID: nodeID, Data: output})
 }
 
 // OnNodeFail records the failure of a node.
@@ -116,6 +142,12 @@ func (h *DBNodeHook) OnNodeFail(ctx context.Context, nodeID string, err error) {
 		StartedAt:   pgStartedAt,
 		CompletedAt: pgCompletedAt,
 	})
+
+	errMsg := ""
+	if err != nil {
+		errMsg = err.Error()
+	}
+	h.publish(RunEvent{Type: "node.failed", RunID: h.runIDStr, NodeID: nodeID, Data: map[string]any{"error": errMsg}})
 }
 
 // OnNodeRetry records that a node is being retried.
@@ -136,4 +168,10 @@ func (h *DBNodeHook) OnNodeRetry(ctx context.Context, nodeID string, attempt int
 		Status: "retrying",
 		Error:  pgErr,
 	})
+
+	errMsg := ""
+	if err != nil {
+		errMsg = err.Error()
+	}
+	h.publish(RunEvent{Type: "node.retrying", RunID: h.runIDStr, NodeID: nodeID, Data: map[string]any{"attempt": attempt, "error": errMsg}})
 }
